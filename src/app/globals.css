@@ -1,0 +1,120 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 210 20% 98%;
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --muted: 210 20% 94%;
+  --muted-foreground: 215 16% 42%;
+  --accent: 199 89% 96%;
+  --accent-foreground: 201 96% 28%;
+  --primary: 172 74% 28%;
+  --primary-foreground: 0 0% 100%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 214 20% 88%;
+  --input: 214 20% 88%;
+  --ring: 172 74% 28%;
+}
+
+* {
+  @apply border-border;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-background text-foreground antialiased;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.table-scroll {
+  scrollbar-width: thin;
+}
+
+@media (max-width: 767px) {
+  .responsive-records {
+    overflow-x: visible;
+    border: 0;
+    background: transparent;
+  }
+
+  .responsive-records table,
+  .responsive-records thead,
+  .responsive-records tbody,
+  .responsive-records tr,
+  .responsive-records th,
+  .responsive-records td {
+    display: block;
+    width: 100%;
+  }
+
+  .responsive-records thead {
+    display: none;
+  }
+
+  .responsive-records tbody {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .responsive-records tr {
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.5rem;
+    background: hsl(var(--card));
+    box-shadow: 0 8px 28px rgba(15, 23, 42, 0.06);
+    padding: 0.75rem;
+  }
+
+  .responsive-records td {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    border-bottom: 1px solid hsl(var(--border));
+    padding: 0.55rem 0;
+    text-align: right;
+    word-break: break-word;
+  }
+
+  .responsive-records td:last-child {
+    border-bottom: 0;
+  }
+
+  .responsive-records td::before {
+    content: attr(data-label);
+    flex: 0 0 42%;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.72rem;
+    font-weight: 700;
+    line-height: 1.25;
+    text-align: left;
+    text-transform: uppercase;
+  }
+
+  .responsive-records td[data-label=""]::before {
+    display: none;
+  }
+
+  .responsive-records td[data-label=""] {
+    justify-content: flex-end;
+    padding-top: 0.75rem;
+  }
+
+  .responsive-records td > * {
+    min-width: 0;
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "name": "atek-budget",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:seed": "tsx prisma/seed.ts",
+    "prisma:studio": "prisma studio"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "overrides": {
+    "postcss": "8.5.15",
+    "uuid": "11.1.1"
+  },
+  "dependencies": {
+    "@hookform/resolvers": "3.9.1",
+    "@next-auth/prisma-adapter": "1.0.7",
+    "@prisma/client": "5.22.0",
+    "@radix-ui/react-slot": "^1.1.1",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "lucide-react": "0.468.0",
+    "next": "16.2.9",
+    "next-auth": "4.24.14",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "react-hook-form": "7.53.2",
+    "recharts": "3.8.1",
+    "tailwind-merge": "2.5.5",
+    "zod": "3.23.8"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "3.3.1",
+    "@types/node": "22.10.2",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "autoprefixer": "10.4.20",
+    "eslint": "9.39.4",
+    "eslint-config-next": "16.2.9",
+    "postcss": "8.5.15",
+    "prisma": "5.22.0",
+    "tailwindcss": "3.4.17",
+    "tsx": "4.19.2",
+    "typescript": "5.7.2"
+  }
+}

@@ -1,0 +1,435 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum WorkspaceRole {
+  OWNER
+  EDITOR
+  VIEWER
+}
+
+enum PeriodStatus {
+  DRAFT
+  ACTIVE
+  CLOSED
+}
+
+enum ExpenseStatus {
+  PENDING
+  OK
+  EXCEEDED
+}
+
+enum DebtStatus {
+  ACTIVE
+  PAID
+  CANCELLED
+}
+
+enum DebtStrategy {
+  AVALANCHE
+  SNOWBALL
+  CUSTOM
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  CANCELLED
+}
+
+enum IncomeAmountType {
+  FIXED
+  VARIABLE
+  ESTIMATED
+}
+
+enum IncomeFrequency {
+  ONE_TIME
+  DAILY
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+  BIMONTHLY
+  QUARTERLY
+  SEMIANNUAL
+  ANNUAL
+  IRREGULAR
+  CUSTOM
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  accounts      Account[]
+  sessions      Session[]
+
+  ownedWorkspaces Workspace[]       @relation("WorkspaceOwner")
+  memberships     WorkspaceMember[]
+  invitationsSent Invitation[]      @relation("InvitationsSent")
+  auditLogs       AuditLog[]
+
+  incomesCreated             Income[]             @relation("IncomeCreatedBy")
+  incomesUpdated             Income[]             @relation("IncomeUpdatedBy")
+  incomeReceiptsCreated      IncomeReceipt[]      @relation("IncomeReceiptCreatedBy")
+  expensesCreated            Expense[]            @relation("ExpenseCreatedBy")
+  expensesUpdated            Expense[]            @relation("ExpenseUpdatedBy")
+  debtsCreated               Debt[]               @relation("DebtCreatedBy")
+  debtsUpdated               Debt[]               @relation("DebtUpdatedBy")
+  savingGoalsCreated         SavingGoal[]         @relation("SavingGoalCreatedBy")
+  savingGoalsUpdated         SavingGoal[]         @relation("SavingGoalUpdatedBy")
+  savingContributionsCreated SavingContribution[] @relation("SavingContributionCreatedBy")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Workspace {
+  id      String @id @default(cuid())
+  name    String
+  ownerId String
+
+  owner       User              @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members     WorkspaceMember[]
+  budgets     Budget[]
+  invitations Invitation[]
+  auditLogs   AuditLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model WorkspaceMember {
+  id          String        @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+}
+
+model Budget {
+  id                   String  @id @default(cuid())
+  workspaceId          String
+  name                 String
+  currency             String  @default("RD$")
+  startDayOfMonth      Int     @default(1)
+  monthlySavingTarget  Decimal @default(0) @db.Decimal(12, 2)
+  savingTargetPercent  Decimal @default(10) @db.Decimal(5, 2)
+  emergencyFundTarget  Decimal @default(0) @db.Decimal(12, 2)
+  emergencyFundCurrent Decimal @default(0) @db.Decimal(12, 2)
+
+  workspace    Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  periods      BudgetPeriod[]
+  categories   ExpenseCategory[]
+  bankAccounts BankAccount[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+}
+
+model BudgetPeriod {
+  id       String       @id @default(cuid())
+  budgetId String
+  year     Int
+  month    Int
+  status   PeriodStatus @default(DRAFT)
+
+  budget         Budget          @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  incomes        Income[]
+  incomeReceipts IncomeReceipt[]
+  expenses       Expense[]
+  debts          Debt[]
+  savingGoals    SavingGoal[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([budgetId, year, month])
+  @@index([budgetId, status])
+}
+
+model Income {
+  id                  String           @id @default(cuid())
+  budgetPeriodId      String
+  responsibleName     String
+  amount              Decimal          @default(0) @db.Decimal(12, 2)
+  amountType          IncomeAmountType @default(FIXED)
+  frequency           IncomeFrequency  @default(MONTHLY)
+  startDate           DateTime         @default(now())
+  endDate             DateTime?
+  customRule          String?
+  expectedPaymentDays Int[]            @default([])
+  amountMonthly       Decimal          @db.Decimal(12, 2)
+  amountQ1            Decimal          @db.Decimal(12, 2)
+  amountQ2            Decimal          @db.Decimal(12, 2)
+  source              String
+  notes               String?
+  isActive            Boolean          @default(true)
+  createdById         String?
+  updatedById         String?
+
+  budgetPeriod BudgetPeriod    @relation(fields: [budgetPeriodId], references: [id], onDelete: Cascade)
+  receipts     IncomeReceipt[]
+  createdBy    User?           @relation("IncomeCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy    User?           @relation("IncomeUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([budgetPeriodId, responsibleName, source])
+  @@index([createdById])
+}
+
+model IncomeReceipt {
+  id              String   @id @default(cuid())
+  budgetPeriodId  String
+  incomeId        String?
+  responsibleName String
+  source          String
+  amount          Decimal  @db.Decimal(12, 2)
+  receivedDate    DateTime
+  notes           String?
+  createdById     String?
+
+  budgetPeriod BudgetPeriod @relation(fields: [budgetPeriodId], references: [id], onDelete: Cascade)
+  income       Income?      @relation(fields: [incomeId], references: [id], onDelete: SetNull)
+  createdBy    User?        @relation("IncomeReceiptCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([budgetPeriodId, receivedDate])
+  @@index([incomeId])
+  @@index([createdById])
+}
+
+model ExpenseCategory {
+  id                    String  @id @default(cuid())
+  budgetId              String
+  name                  String
+  icon                  String?
+  recommendedMaxPercent Decimal @db.Decimal(5, 2)
+  isDefault             Boolean @default(false)
+
+  budget   Budget    @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  expenses Expense[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([budgetId, name])
+}
+
+model BankAccount {
+  id          String  @id @default(cuid())
+  budgetId    String
+  name        String
+  institution String
+  type        String
+  notes       String?
+
+  budget   Budget    @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  expenses Expense[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([budgetId, name])
+}
+
+model Expense {
+  id                    String        @id @default(cuid())
+  budgetPeriodId        String
+  name                  String
+  responsibleName       String
+  categoryId            String
+  amountBudgetedMonthly Decimal       @db.Decimal(12, 2)
+  amountQ1              Decimal       @db.Decimal(12, 2)
+  amountQ2              Decimal       @db.Decimal(12, 2)
+  bankAccountId         String?
+  actualAmount          Decimal?      @db.Decimal(12, 2)
+  difference            Decimal       @default(0) @db.Decimal(12, 2)
+  status                ExpenseStatus @default(PENDING)
+  expenseDate           DateTime?
+  isRecurring           Boolean       @default(true)
+  isActive              Boolean       @default(true)
+  notes                 String?
+  createdById           String?
+  updatedById           String?
+
+  budgetPeriod BudgetPeriod    @relation(fields: [budgetPeriodId], references: [id], onDelete: Cascade)
+  category     ExpenseCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  bankAccount  BankAccount?    @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
+  createdBy    User?           @relation("ExpenseCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy    User?           @relation("ExpenseUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([budgetPeriodId, name])
+  @@index([categoryId])
+  @@index([bankAccountId])
+}
+
+model Debt {
+  id                     String       @id @default(cuid())
+  budgetPeriodId         String
+  name                   String
+  entity                 String
+  responsibleName        String
+  pendingBalance         Decimal      @db.Decimal(12, 2)
+  monthlyPayment         Decimal      @db.Decimal(12, 2)
+  annualInterestRate     Decimal      @db.Decimal(6, 2)
+  remainingMonths        Int
+  estimatedTotalInterest Decimal      @db.Decimal(12, 2)
+  strategy               DebtStrategy @default(CUSTOM)
+  startDate              DateTime?
+  estimatedCloseDate     DateTime?
+  status                 DebtStatus   @default(ACTIVE)
+  notes                  String?
+  createdById            String?
+  updatedById            String?
+
+  budgetPeriod BudgetPeriod @relation(fields: [budgetPeriodId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("DebtCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy    User?        @relation("DebtUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([budgetPeriodId, name, entity])
+}
+
+model SavingGoal {
+  id                   String  @id @default(cuid())
+  budgetPeriodId       String
+  name                 String
+  monthlyTarget        Decimal @db.Decimal(12, 2)
+  contributedThisMonth Decimal @db.Decimal(12, 2)
+  accumulatedBalance   Decimal @db.Decimal(12, 2)
+  institution          String
+  priority             Int
+  notes                String?
+  createdById          String?
+  updatedById          String?
+
+  budgetPeriod  BudgetPeriod         @relation(fields: [budgetPeriodId], references: [id], onDelete: Cascade)
+  contributions SavingContribution[]
+  createdBy     User?                @relation("SavingGoalCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy     User?                @relation("SavingGoalUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([budgetPeriodId, name])
+}
+
+model SavingContribution {
+  id               String   @id @default(cuid())
+  savingGoalId     String
+  amount           Decimal  @db.Decimal(12, 2)
+  contributionDate DateTime
+  notes            String?
+  createdById      String?
+
+  savingGoal SavingGoal @relation(fields: [savingGoalId], references: [id], onDelete: Cascade)
+  createdBy  User?      @relation("SavingContributionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@unique([savingGoalId, contributionDate])
+}
+
+model Invitation {
+  id          String           @id @default(cuid())
+  workspaceId String
+  email       String
+  role        WorkspaceRole
+  token       String           @unique
+  status      InvitationStatus @default(PENDING)
+  invitedById String?
+  acceptedAt  DateTime?
+  expiresAt   DateTime
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy User?     @relation("InvitationsSent", fields: [invitedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspaceId, email])
+}
+
+model AuditLog {
+  id          String  @id @default(cuid())
+  workspaceId String
+  userId      String?
+  entityType  String
+  entityId    String
+  action      String
+  oldValue    Json?
+  newValue    Json?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([userId])
+}
