@@ -56,6 +56,15 @@ export const expenseSchema = z.object({
   notes: z.string().optional()
 });
 
+export const expenseCategorySchema = z.object({
+  name: z.string().trim().min(1, "El nombre de la categoría es obligatorio."),
+  icon: z.string().trim().optional(),
+  recommendedMaxPercent: z.coerce
+    .number()
+    .min(0, "La meta no puede ser negativa.")
+    .max(100, "La meta no puede ser mayor a 100%.")
+});
+
 export const debtSchema = z.object({
   name: z.string().min(1, "El nombre de la deuda es obligatorio."),
   entity: z.string().min(1, "La entidad es obligatoria."),

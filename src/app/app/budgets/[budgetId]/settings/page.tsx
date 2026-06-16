@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 
 import { BudgetDeleteButton } from "@/components/budget-delete-button";
+import { ExpenseCategoryManager } from "@/components/expense-category-manager";
 import { InviteMemberForm } from "@/components/forms";
 import { StatusBadge } from "@/components/status-badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -46,32 +47,17 @@ export default async function SettingsPage({ params }: PageProps) {
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Categorías</CardTitle>
-            <CardDescription>Metas máximas recomendadas por categoría.</CardDescription>
-          </CardHeader>
-          <CardContent className="responsive-records">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Nombre</TableHead>
-                  <TableHead>Icono</TableHead>
-                  <TableHead>Meta</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {budget.categories.map((category) => (
-                  <TableRow key={category.id}>
-                    <TableCell className="font-medium" data-label="Nombre">{category.name}</TableCell>
-                    <TableCell data-label="Icono">{category.icon}</TableCell>
-                    <TableCell data-label="Meta">{formatPercent(Number(category.recommendedMaxPercent))}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+        <ExpenseCategoryManager
+          budgetId={budgetId}
+          canEdit={access.canEdit}
+          categories={budget.categories.map((category) => ({
+            id: category.id,
+            name: category.name,
+            icon: category.icon ?? "",
+            recommendedMaxPercent: Number(category.recommendedMaxPercent),
+            expensesCount: category._count.expenses
+          }))}
+        />
 
         <Card>
           <CardHeader>

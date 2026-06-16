@@ -8,6 +8,7 @@ import { requireBudgetRole, requireUser } from "@/lib/authorization";
 import {
   createBudgetSchema,
   debtSchema,
+  expenseCategorySchema,
   expenseSchema,
   incomeReceiptSchema,
   incomeSchema,
@@ -637,6 +638,168 @@ export async function deleteIncomeReceiptAction(budgetId: string, receiptId: str
 
   revalidatePath(`/app/budgets/${budgetId}`);
   revalidatePath(`/app/budgets/${budgetId}/income`);
+}
+
+function revalidateBudgetCategoryPaths(budgetId: string) {
+  revalidatePath(`/app/budgets/${budgetId}`);
+  revalidatePath(`/app/budgets/${budgetId}/settings`);
+  revalidatePath(`/app/budgets/${budgetId}/expenses`);
+  revalidatePath(`/app/budgets/${budgetId}/dashboard`);
+}
+
+export async function createExpenseCategoryAction(budgetId: string, raw: unknown) {
+  const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER, WorkspaceRole.EDITOR]);
+  const data = expenseCategorySchema.parse(raw);
+
+  await prisma.$transaction(async (tx) => {
+    const duplicate = await tx.expenseCategory.findFirst({
+      where: {
+        budgetId,
+        name: data.name
+      }
+    });
+
+    if (duplicate) {
+      throw new Error("Ya existe una categoría con ese nombre en este presupuesto.");
+    }
+
+    const category = await tx.expenseCategory.create({
+      data: {
+        budgetId,
+        name: data.name,
+        icon: data.icon || null,
+        recommendedMaxPercent: data.recommendedMaxPercent,
+        isDefault: false
+      }
+    });
+
+    await audit(tx, {
+      workspaceId: access.budget.workspaceId,
+      userId: access.user.id,
+      entityType: "ExpenseCategory",
+      entityId: category.id,
+      action: "CREATE_EXPENSE_CATEGORY",
+      newValue: {
+        name: category.name,
+        icon: category.icon,
+        recommendedMaxPercent: Number(category.recommendedMaxPercent)
+      }
+    });
+  });
+
+  revalidateBudgetCategoryPaths(budgetId);
+}
+
+export async function updateExpenseCategoryAction(budgetId: string, categoryId: string, raw: unknown) {
+  const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER, WorkspaceRole.EDITOR]);
+  const data = expenseCategorySchema.parse(raw);
+
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.expenseCategory.findFirst({
+      where: {
+        id: categoryId,
+        budgetId
+      }
+    });
+
+    if (!existing) {
+      throw new Error("No se encontró la categoría en este presupuesto.");
+    }
+
+    const duplicate = await tx.expenseCategory.findFirst({
+      where: {
+        budgetId,
+        name: data.name,
+        NOT: {
+          id: existing.id
+        }
+      }
+    });
+
+    if (duplicate) {
+      throw new Error("Ya existe otra categoría con ese nombre en este presupuesto.");
+    }
+
+    const category = await tx.expenseCategory.update({
+      where: {
+        id: existing.id
+      },
+      data: {
+        name: data.name,
+        icon: data.icon || null,
+        recommendedMaxPercent: data.recommendedMaxPercent
+      }
+    });
+
+    await audit(tx, {
+      workspaceId: access.budget.workspaceId,
+      userId: access.user.id,
+      entityType: "ExpenseCategory",
+      entityId: category.id,
+      action: "UPDATE_EXPENSE_CATEGORY",
+      oldValue: {
+        name: existing.name,
+        icon: existing.icon,
+        recommendedMaxPercent: Number(existing.recommendedMaxPercent)
+      },
+      newValue: {
+        name: category.name,
+        icon: category.icon,
+        recommendedMaxPercent: Number(category.recommendedMaxPercent)
+      }
+    });
+  });
+
+  revalidateBudgetCategoryPaths(budgetId);
+}
+
+export async function deleteExpenseCategoryAction(budgetId: string, categoryId: string) {
+  const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER, WorkspaceRole.EDITOR]);
+
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.expenseCategory.findFirst({
+      where: {
+        id: categoryId,
+        budgetId
+      },
+      include: {
+        _count: {
+          select: {
+            expenses: true
+          }
+        }
+      }
+    });
+
+    if (!existing) {
+      throw new Error("No se encontró la categoría en este presupuesto.");
+    }
+
+    if (existing._count.expenses > 0) {
+      throw new Error("No puedes eliminar una categoría que ya tiene gastos registrados. Puedes editar su nombre para reutilizarla.");
+    }
+
+    await tx.expenseCategory.delete({
+      where: {
+        id: existing.id
+      }
+    });
+
+    await audit(tx, {
+      workspaceId: access.budget.workspaceId,
+      userId: access.user.id,
+      entityType: "ExpenseCategory",
+      entityId: existing.id,
+      action: "DELETE_EXPENSE_CATEGORY",
+      oldValue: {
+        name: existing.name,
+        icon: existing.icon,
+        recommendedMaxPercent: Number(existing.recommendedMaxPercent)
+      }
+    });
+  });
+
+  revalidateBudgetCategoryPaths(budgetId);
 }
 
 export async function createExpenseAction(budgetId: string, periodTarget: PeriodTarget, raw: unknown) {

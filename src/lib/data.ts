@@ -54,6 +54,13 @@ export async function getBudgetWorkspaceData(budgetId: string) {
         }
       },
       categories: {
+        include: {
+          _count: {
+            select: {
+              expenses: true
+            }
+          }
+        },
         orderBy: {
           name: "asc"
         }
