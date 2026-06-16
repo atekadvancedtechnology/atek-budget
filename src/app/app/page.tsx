@@ -1,6 +1,7 @@
 import { ArrowRight, CalendarClock, UsersRound } from "lucide-react";
 import Link from "next/link";
 
+import { BudgetDeleteButton } from "@/components/budget-delete-button";
 import { CreateBudgetForm } from "@/components/forms";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -56,12 +57,17 @@ export default async function AppHomePage() {
                       <p className="mt-2 font-medium">{budget.workspace.members.length}</p>
                     </div>
                   </div>
-                  <Button asChild>
-                    <Link href={`/app/budgets/${budget.id}/dashboard`}>
-                      Abrir dashboard
-                      <ArrowRight aria-hidden="true" className="h-4 w-4" />
-                    </Link>
-                  </Button>
+                  <div className="flex flex-wrap gap-2">
+                    <Button asChild>
+                      <Link href={`/app/budgets/${budget.id}/dashboard`}>
+                        Abrir dashboard
+                        <ArrowRight aria-hidden="true" className="h-4 w-4" />
+                      </Link>
+                    </Button>
+                    {role === "OWNER" ? (
+                      <BudgetDeleteButton budgetId={budget.id} budgetName={budget.name} compact />
+                    ) : null}
+                  </div>
                 </CardContent>
               </Card>
             );

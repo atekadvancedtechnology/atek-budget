@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 
+import { BudgetDeleteButton } from "@/components/budget-delete-button";
 import { InviteMemberForm } from "@/components/forms";
 import { StatusBadge } from "@/components/status-badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -157,6 +158,20 @@ export default async function SettingsPage({ params }: PageProps) {
           </CardContent>
         </Card>
       </div>
+
+      {access.canManage ? (
+        <Card className="border-destructive/30">
+          <CardHeader>
+            <CardTitle>Eliminar presupuesto</CardTitle>
+            <CardDescription>
+              Borra este presupuesto y todos sus periodos, ingresos, gastos, deudas, metas, categorias y cuentas.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <BudgetDeleteButton budgetId={budgetId} budgetName={budget.name} />
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   );
 }

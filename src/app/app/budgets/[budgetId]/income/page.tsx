@@ -75,6 +75,7 @@ export default async function IncomePage({ params, searchParams }: PageProps) {
   const returnPath = periodHref(basePath, selection.year, selection.month);
   const editIncome = selectedPeriod?.incomes.find((income) => income.id === query?.editIncome);
   const editReceipt = selectedPeriod?.incomeReceipts.find((receipt) => receipt.id === query?.editReceipt);
+  const editReceiptIncome = editReceipt?.income;
 
   return (
     <div className="space-y-6">
@@ -139,8 +140,8 @@ export default async function IncomePage({ params, searchParams }: PageProps) {
           editReceipt
             ? {
                 incomeId: editReceipt.incomeId ?? "",
-                responsibleName: editReceipt.responsibleName,
-                source: editReceipt.source,
+                responsibleName: editReceiptIncome?.responsibleName ?? editReceipt.responsibleName,
+                source: editReceiptIncome?.source ?? editReceipt.source,
                 amount: Number(editReceipt.amount),
                 receivedDate: formatDateInput(editReceipt.receivedDate),
                 notes: editReceipt.notes ?? ""
@@ -232,25 +233,30 @@ export default async function IncomePage({ params, searchParams }: PageProps) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {selectedPeriod?.incomeReceipts.map((receipt) => (
-              <TableRow key={receipt.id}>
-                <TableCell data-label="Fecha recibida">{formatDate(receipt.receivedDate)}</TableCell>
-                <TableCell className="font-medium" data-label="Responsable">{receipt.responsibleName}</TableCell>
-                <TableCell data-label="Fuente">{receipt.source}</TableCell>
-                <TableCell data-label="Monto recibido">{formatCurrency(receipt.amount)}</TableCell>
-                <TableCell data-label="Notas">{receipt.notes ?? ""}</TableCell>
-                <TableCell className="text-right" data-label="">
-                  {access.canEdit ? (
-                    <RecordActions
-                      budgetId={budgetId}
-                      editHref={periodHref(basePath, selection.year, selection.month, { editReceipt: receipt.id })}
-                      entity="incomeReceipt"
-                      recordId={receipt.id}
-                    />
-                  ) : null}
-                </TableCell>
-              </TableRow>
-            ))}
+            {selectedPeriod?.incomeReceipts.map((receipt) => {
+              const responsibleName = receipt.income?.responsibleName ?? receipt.responsibleName;
+              const source = receipt.income?.source ?? receipt.source;
+
+              return (
+                <TableRow key={receipt.id}>
+                  <TableCell data-label="Fecha recibida">{formatDate(receipt.receivedDate)}</TableCell>
+                  <TableCell className="font-medium" data-label="Responsable">{responsibleName}</TableCell>
+                  <TableCell data-label="Fuente">{source}</TableCell>
+                  <TableCell data-label="Monto recibido">{formatCurrency(receipt.amount)}</TableCell>
+                  <TableCell data-label="Notas">{receipt.notes ?? ""}</TableCell>
+                  <TableCell className="text-right" data-label="">
+                    {access.canEdit ? (
+                      <RecordActions
+                        budgetId={budgetId}
+                        editHref={periodHref(basePath, selection.year, selection.month, { editReceipt: receipt.id })}
+                        entity="incomeReceipt"
+                        recordId={receipt.id}
+                      />
+                    ) : null}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       </div>

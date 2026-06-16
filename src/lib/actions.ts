@@ -211,6 +211,55 @@ export async function createBudgetAction(raw: unknown) {
   redirect(`/app/budgets/${budget.id}/dashboard`);
 }
 
+export async function deleteBudgetAction(budgetId: string) {
+  const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER]);
+
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.budget.findUnique({
+      where: {
+        id: budgetId
+      },
+      include: {
+        _count: {
+          select: {
+            bankAccounts: true,
+            categories: true,
+            periods: true
+          }
+        }
+      }
+    });
+
+    if (!existing) {
+      throw new Error("No se encontrÃ³ el presupuesto.");
+    }
+
+    await audit(tx, {
+      workspaceId: access.budget.workspaceId,
+      userId: access.user.id,
+      entityType: "Budget",
+      entityId: existing.id,
+      action: "DELETE_BUDGET",
+      oldValue: {
+        name: existing.name,
+        workspaceId: existing.workspaceId,
+        periods: existing._count.periods,
+        categories: existing._count.categories,
+        bankAccounts: existing._count.bankAccounts
+      }
+    });
+
+    await tx.budget.delete({
+      where: {
+        id: existing.id
+      }
+    });
+  });
+
+  revalidatePath("/app");
+  revalidatePath(`/app/budgets/${budgetId}`);
+}
+
 export async function createIncomeAction(budgetId: string, periodTarget: PeriodTarget, raw: unknown) {
   const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER, WorkspaceRole.EDITOR]);
   const data = incomeSchema.parse(raw);
@@ -328,6 +377,18 @@ export async function updateIncomeAction(budgetId: string, incomeId: string, raw
       }
     });
 
+    if (existing.responsibleName !== income.responsibleName || existing.source !== income.source) {
+      await tx.incomeReceipt.updateMany({
+        where: {
+          incomeId: income.id
+        },
+        data: {
+          responsibleName: income.responsibleName,
+          source: income.source
+        }
+      });
+    }
+
     await audit(tx, {
       workspaceId: access.budget.workspaceId,
       userId: access.user.id,
@@ -405,18 +466,22 @@ export async function createIncomeReceiptAction(budgetId: string, periodTarget: 
 
   await prisma.$transaction(async (tx) => {
     const period = await getOrCreateBudgetPeriodWithInheritance(tx, budgetId, periodTarget, access.user.id);
+    let linkedIncome: { id: string; responsibleName: string; source: string } | null = null;
+
     if (data.incomeId) {
-      const income = await tx.income.findFirst({
+      linkedIncome = await tx.income.findFirst({
         where: {
           id: data.incomeId,
           budgetPeriodId: period.id
         },
         select: {
-          id: true
+          id: true,
+          responsibleName: true,
+          source: true
         }
       });
 
-      if (!income) {
+      if (!linkedIncome) {
         throw new Error("El ingreso planificado seleccionado no pertenece al periodo seleccionado.");
       }
     }
@@ -424,9 +489,9 @@ export async function createIncomeReceiptAction(budgetId: string, periodTarget: 
     const receipt = await tx.incomeReceipt.create({
       data: {
         budgetPeriodId: period.id,
-        incomeId: data.incomeId || null,
-        responsibleName: data.responsibleName,
-        source: data.source,
+        incomeId: linkedIncome?.id ?? null,
+        responsibleName: linkedIncome?.responsibleName ?? data.responsibleName,
+        source: linkedIncome?.source ?? data.source,
         amount: data.amount,
         receivedDate: new Date(data.receivedDate),
         notes: data.notes,
@@ -473,18 +538,22 @@ export async function updateIncomeReceiptAction(budgetId: string, receiptId: str
       throw new Error("No se encontró el ingreso recibido en este presupuesto.");
     }
 
+    let linkedIncome: { id: string; responsibleName: string; source: string } | null = null;
+
     if (data.incomeId) {
-      const income = await tx.income.findFirst({
+      linkedIncome = await tx.income.findFirst({
         where: {
           id: data.incomeId,
           budgetPeriodId: existing.budgetPeriodId
         },
         select: {
-          id: true
+          id: true,
+          responsibleName: true,
+          source: true
         }
       });
 
-      if (!income) {
+      if (!linkedIncome) {
         throw new Error("El ingreso planificado seleccionado no pertenece al periodo del ingreso recibido.");
       }
     }
@@ -494,9 +563,9 @@ export async function updateIncomeReceiptAction(budgetId: string, receiptId: str
         id: existing.id
       },
       data: {
-        incomeId: data.incomeId || null,
-        responsibleName: data.responsibleName,
-        source: data.source,
+        incomeId: linkedIncome?.id ?? null,
+        responsibleName: linkedIncome?.responsibleName ?? data.responsibleName,
+        source: linkedIncome?.source ?? data.source,
         amount: data.amount,
         receivedDate: new Date(data.receivedDate),
         notes: data.notes

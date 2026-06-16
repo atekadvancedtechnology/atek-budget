@@ -79,6 +79,9 @@ export async function getBudgetWorkspaceData(budgetId: string) {
             }
           },
           incomeReceipts: {
+            include: {
+              income: true
+            },
             orderBy: {
               receivedDate: "desc"
             }
