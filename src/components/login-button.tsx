@@ -4,9 +4,9 @@ import { signIn } from "next-auth/react";
 
 import { Button } from "@/components/ui/button";
 
-export function LoginButton() {
+export function LoginButton({ callbackUrl = "/app" }: { callbackUrl?: string }) {
   return (
-    <Button type="button" onClick={() => signIn("google", { callbackUrl: "/app" })}>
+    <Button type="button" onClick={() => signIn("google", { callbackUrl })}>
       <GoogleIcon />
       Continuar con Google
     </Button>

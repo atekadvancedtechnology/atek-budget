@@ -4,6 +4,7 @@ import { BankAccountManager } from "@/components/bank-account-manager";
 import { BudgetDeleteButton } from "@/components/budget-delete-button";
 import { ExpenseCategoryManager } from "@/components/expense-category-manager";
 import { InviteMemberForm } from "@/components/forms";
+import { InvitationLinkActions } from "@/components/invitation-link-actions";
 import { StatusBadge } from "@/components/status-badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -20,6 +21,7 @@ export default async function SettingsPage({ params }: PageProps) {
   const access = await requireBudgetAccess(budgetId);
   const budget = await getBudgetWorkspaceData(budgetId);
   if (!budget) notFound();
+  const now = new Date();
 
   return (
     <div className="space-y-6">
@@ -114,18 +116,27 @@ export default async function SettingsPage({ params }: PageProps) {
                   <TableHead>Email</TableHead>
                   <TableHead>Rol</TableHead>
                   <TableHead>Estado</TableHead>
+                  <TableHead>Link</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {budget.workspace.invitations.map((invitation) => (
-                  <TableRow key={invitation.id}>
-                    <TableCell className="font-medium" data-label="Email">{invitation.email}</TableCell>
-                    <TableCell data-label="Rol">{invitation.role}</TableCell>
-                    <TableCell data-label="Estado">
-                      <StatusBadge status={invitation.status} />
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {budget.workspace.invitations.map((invitation) => {
+                  const invitationStatus =
+                    invitation.status === "PENDING" && invitation.expiresAt < now ? "EXPIRED" : invitation.status;
+
+                  return (
+                    <TableRow key={invitation.id}>
+                      <TableCell className="font-medium" data-label="Email">{invitation.email}</TableCell>
+                      <TableCell data-label="Rol">{invitation.role}</TableCell>
+                      <TableCell data-label="Estado">
+                        <StatusBadge status={invitationStatus} />
+                      </TableCell>
+                      <TableCell data-label="Link">
+                        <InvitationLinkActions status={invitationStatus} token={invitation.token} />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </CardContent>

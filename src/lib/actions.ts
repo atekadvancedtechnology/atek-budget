@@ -1810,14 +1810,58 @@ export async function deleteSavingGoalAction(budgetId: string, goalId: string) {
 export async function inviteMemberAction(budgetId: string, raw: unknown) {
   const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER]);
   const data = invitationSchema.parse(raw);
+  const email = data.email.toLowerCase();
+  const now = new Date();
   const expiresAt = new Date();
   expiresAt.setDate(expiresAt.getDate() + 7);
 
   await prisma.$transaction(async (tx) => {
+    await tx.invitation.updateMany({
+      where: {
+        workspaceId: access.budget.workspaceId,
+        email,
+        status: "PENDING",
+        expiresAt: {
+          lt: now
+        }
+      },
+      data: {
+        status: "EXPIRED"
+      }
+    });
+
+    const existingMember = await tx.workspaceMember.findFirst({
+      where: {
+        workspaceId: access.budget.workspaceId,
+        user: {
+          email
+        }
+      }
+    });
+
+    if (existingMember) {
+      throw new Error("Ese correo ya es miembro de este workspace.");
+    }
+
+    const pendingInvitation = await tx.invitation.findFirst({
+      where: {
+        workspaceId: access.budget.workspaceId,
+        email,
+        status: "PENDING",
+        expiresAt: {
+          gte: now
+        }
+      }
+    });
+
+    if (pendingInvitation) {
+      throw new Error("Ya existe una invitacion pendiente para ese correo. Copia el link desde la lista de invitaciones.");
+    }
+
     const invitation = await tx.invitation.create({
       data: {
         workspaceId: access.budget.workspaceId,
-        email: data.email.toLowerCase(),
+        email,
         role: data.role,
         token: crypto.randomUUID(),
         status: "PENDING",
@@ -1840,6 +1884,128 @@ export async function inviteMemberAction(budgetId: string, raw: unknown) {
   });
 
   revalidatePath(`/app/budgets/${budgetId}/settings`);
+}
+
+export async function acceptInvitationAction(token: string) {
+  const user = await requireUser();
+  if (!user.email) {
+    throw new Error("Tu cuenta de Google no tiene correo disponible.");
+  }
+
+  const email = user.email.toLowerCase();
+  const now = new Date();
+
+  const destinationBudgetId = await prisma.$transaction(async (tx) => {
+    const invitation = await tx.invitation.findUnique({
+      where: {
+        token
+      },
+      include: {
+        workspace: {
+          include: {
+            budgets: {
+              orderBy: {
+                createdAt: "asc"
+              },
+              select: {
+                id: true
+              },
+              take: 1
+            }
+          }
+        }
+      }
+    });
+
+    if (!invitation) {
+      throw new Error("No se encontro esta invitacion.");
+    }
+
+    if (invitation.email.toLowerCase() !== email) {
+      throw new Error(`Esta invitacion es para ${invitation.email}. Inicia sesion con ese correo para aceptarla.`);
+    }
+
+    if (invitation.status === "CANCELLED") {
+      throw new Error("Esta invitacion fue cancelada.");
+    }
+
+    if (invitation.status === "EXPIRED" || (invitation.status === "PENDING" && invitation.expiresAt < now)) {
+      if (invitation.status === "PENDING") {
+        await tx.invitation.update({
+          where: {
+            id: invitation.id
+          },
+          data: {
+            status: "EXPIRED"
+          }
+        });
+      }
+      throw new Error("Esta invitacion expiro. Pide que te envien una nueva.");
+    }
+
+    const existingMember = await tx.workspaceMember.findFirst({
+      where: {
+        workspaceId: invitation.workspaceId,
+        OR: [
+          {
+            userId: user.id
+          },
+          {
+            user: {
+              email
+            }
+          }
+        ]
+      }
+    });
+
+    if (!existingMember) {
+      await tx.workspaceMember.create({
+        data: {
+          workspaceId: invitation.workspaceId,
+          userId: user.id,
+          role: invitation.role
+        }
+      });
+    }
+
+    if (invitation.status !== "ACCEPTED") {
+      await tx.invitation.update({
+        where: {
+          id: invitation.id
+        },
+        data: {
+          status: "ACCEPTED",
+          acceptedAt: now
+        }
+      });
+
+      await audit(tx, {
+        workspaceId: invitation.workspaceId,
+        userId: user.id,
+        entityType: "Invitation",
+        entityId: invitation.id,
+        action: "ACCEPT_INVITATION",
+        oldValue: {
+          status: invitation.status
+        },
+        newValue: {
+          email: invitation.email,
+          role: invitation.role,
+          status: "ACCEPTED"
+        }
+      });
+    }
+
+    return invitation.workspace.budgets[0]?.id;
+  });
+
+  revalidatePath("/app");
+  if (destinationBudgetId) {
+    revalidatePath(`/app/budgets/${destinationBudgetId}/settings`);
+    redirect(`/app/budgets/${destinationBudgetId}/dashboard`);
+  }
+  redirect("/app");
 }
 
 export async function copyNextPeriodAction(budgetId: string) {
