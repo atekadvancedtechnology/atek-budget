@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 
 import { requireBudgetRole, requireUser } from "@/lib/authorization";
 import {
+  bankAccountSchema,
   createBudgetSchema,
   debtSchema,
   expenseCategorySchema,
@@ -648,6 +649,15 @@ function revalidateBudgetCategoryPaths(budgetId: string) {
   revalidatePath(`/app/budgets/${budgetId}/dashboard`);
 }
 
+function revalidateBudgetAccountPaths(budgetId: string) {
+  revalidatePath(`/app/budgets/${budgetId}`);
+  revalidatePath(`/app/budgets/${budgetId}/settings`);
+  revalidatePath(`/app/budgets/${budgetId}/expenses`);
+  revalidatePath(`/app/budgets/${budgetId}/dashboard`);
+  revalidatePath(`/app/budgets/${budgetId}/cashflow`);
+  revalidatePath(`/app/budgets/${budgetId}/history`);
+}
+
 function revalidateBudgetExpensePaths(budgetId: string) {
   revalidatePath(`/app/budgets/${budgetId}`);
   revalidatePath(`/app/budgets/${budgetId}/expenses`);
@@ -845,6 +855,169 @@ export async function deleteExpenseCategoryAction(budgetId: string, categoryId: 
   });
 
   revalidateBudgetCategoryPaths(budgetId);
+}
+
+export async function createBankAccountAction(budgetId: string, raw: unknown) {
+  const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER, WorkspaceRole.EDITOR]);
+  const data = bankAccountSchema.parse(raw);
+
+  await prisma.$transaction(async (tx) => {
+    const duplicate = await tx.bankAccount.findFirst({
+      where: {
+        budgetId,
+        name: data.name
+      }
+    });
+
+    if (duplicate) {
+      throw new Error("Ya existe una cuenta con ese nombre en este presupuesto.");
+    }
+
+    const account = await tx.bankAccount.create({
+      data: {
+        budgetId,
+        name: data.name,
+        institution: data.institution,
+        type: data.type,
+        notes: data.notes || null
+      }
+    });
+
+    await audit(tx, {
+      workspaceId: access.budget.workspaceId,
+      userId: access.user.id,
+      entityType: "BankAccount",
+      entityId: account.id,
+      action: "CREATE_BANK_ACCOUNT",
+      newValue: {
+        name: account.name,
+        institution: account.institution,
+        type: account.type,
+        notes: account.notes
+      }
+    });
+  });
+
+  revalidateBudgetAccountPaths(budgetId);
+}
+
+export async function updateBankAccountAction(budgetId: string, accountId: string, raw: unknown) {
+  const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER, WorkspaceRole.EDITOR]);
+  const data = bankAccountSchema.parse(raw);
+
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.bankAccount.findFirst({
+      where: {
+        id: accountId,
+        budgetId
+      }
+    });
+
+    if (!existing) {
+      throw new Error("No se encontro la cuenta en este presupuesto.");
+    }
+
+    const duplicate = await tx.bankAccount.findFirst({
+      where: {
+        budgetId,
+        name: data.name,
+        NOT: {
+          id: existing.id
+        }
+      }
+    });
+
+    if (duplicate) {
+      throw new Error("Ya existe otra cuenta con ese nombre en este presupuesto.");
+    }
+
+    const account = await tx.bankAccount.update({
+      where: {
+        id: existing.id
+      },
+      data: {
+        name: data.name,
+        institution: data.institution,
+        type: data.type,
+        notes: data.notes || null
+      }
+    });
+
+    await audit(tx, {
+      workspaceId: access.budget.workspaceId,
+      userId: access.user.id,
+      entityType: "BankAccount",
+      entityId: account.id,
+      action: "UPDATE_BANK_ACCOUNT",
+      oldValue: {
+        name: existing.name,
+        institution: existing.institution,
+        type: existing.type,
+        notes: existing.notes
+      },
+      newValue: {
+        name: account.name,
+        institution: account.institution,
+        type: account.type,
+        notes: account.notes
+      }
+    });
+  });
+
+  revalidateBudgetAccountPaths(budgetId);
+}
+
+export async function deleteBankAccountAction(budgetId: string, accountId: string) {
+  const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER, WorkspaceRole.EDITOR]);
+
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.bankAccount.findFirst({
+      where: {
+        id: accountId,
+        budgetId
+      },
+      include: {
+        _count: {
+          select: {
+            expenses: true,
+            expensePayments: true
+          }
+        }
+      }
+    });
+
+    if (!existing) {
+      throw new Error("No se encontro la cuenta en este presupuesto.");
+    }
+
+    if (existing._count.expenses > 0 || existing._count.expensePayments > 0) {
+      throw new Error(
+        "No puedes eliminar una cuenta que ya tiene gastos o pagos registrados. Puedes editar su nombre para reutilizarla."
+      );
+    }
+
+    await tx.bankAccount.delete({
+      where: {
+        id: existing.id
+      }
+    });
+
+    await audit(tx, {
+      workspaceId: access.budget.workspaceId,
+      userId: access.user.id,
+      entityType: "BankAccount",
+      entityId: existing.id,
+      action: "DELETE_BANK_ACCOUNT",
+      oldValue: {
+        name: existing.name,
+        institution: existing.institution,
+        type: existing.type,
+        notes: existing.notes
+      }
+    });
+  });
+
+  revalidateBudgetAccountPaths(budgetId);
 }
 
 export async function createExpenseAction(budgetId: string, periodTarget: PeriodTarget, raw: unknown) {

@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 
+import { BankAccountManager } from "@/components/bank-account-manager";
 import { BudgetDeleteButton } from "@/components/budget-delete-button";
 import { ExpenseCategoryManager } from "@/components/expense-category-manager";
 import { InviteMemberForm } from "@/components/forms";
@@ -23,7 +24,7 @@ export default async function SettingsPage({ params }: PageProps) {
   return (
     <div className="space-y-6">
       <div>
-        <p className="text-sm text-muted-foreground">Configuración</p>
+        <p className="text-sm text-muted-foreground">Configuracion</p>
         <h2 className="text-2xl font-semibold tracking-normal">{budget.name}</h2>
       </div>
 
@@ -31,11 +32,11 @@ export default async function SettingsPage({ params }: PageProps) {
         <Card>
           <CardHeader>
             <CardTitle>Presupuesto</CardTitle>
-            <CardDescription>Configuración general y metas de ahorro.</CardDescription>
+            <CardDescription>Configuracion general y metas de ahorro.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 sm:grid-cols-2">
             <Setting label="Moneda" value={budget.currency} />
-            <Setting label="Día de inicio" value={String(budget.startDayOfMonth)} />
+            <Setting label="Dia de inicio" value={String(budget.startDayOfMonth)} />
             <Setting label="Meta ahorro mensual" value={formatCurrency(budget.monthlySavingTarget)} />
             <Setting label="Meta ahorro %" value={formatPercent(Number(budget.savingTargetPercent))} />
             <Setting label="Meta fondo emergencia" value={formatCurrency(budget.emergencyFundTarget)} />
@@ -59,32 +60,18 @@ export default async function SettingsPage({ params }: PageProps) {
           }))}
         />
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Cuentas</CardTitle>
-            <CardDescription>Bancos, tarjetas y fuentes disponibles.</CardDescription>
-          </CardHeader>
-          <CardContent className="responsive-records">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Nombre</TableHead>
-                  <TableHead>Institución</TableHead>
-                  <TableHead>Tipo</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {budget.bankAccounts.map((account) => (
-                  <TableRow key={account.id}>
-                    <TableCell className="font-medium" data-label="Nombre">{account.name}</TableCell>
-                    <TableCell data-label="Institución">{account.institution}</TableCell>
-                    <TableCell data-label="Tipo">{account.type}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+        <BankAccountManager
+          budgetId={budgetId}
+          canEdit={access.canEdit}
+          accounts={budget.bankAccounts.map((account) => ({
+            id: account.id,
+            name: account.name,
+            institution: account.institution,
+            type: account.type,
+            notes: account.notes ?? "",
+            usageCount: account._count.expenses + account._count.expensePayments
+          }))}
+        />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
@@ -118,7 +105,7 @@ export default async function SettingsPage({ params }: PageProps) {
         <Card>
           <CardHeader>
             <CardTitle>Invitaciones</CardTitle>
-            <CardDescription>Últimas invitaciones emitidas.</CardDescription>
+            <CardDescription>Ultimas invitaciones emitidas.</CardDescription>
           </CardHeader>
           <CardContent className="responsive-records">
             <Table>
