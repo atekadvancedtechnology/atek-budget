@@ -260,19 +260,17 @@ export async function getBudgetWorkspaceDataForPeriod(
   if (!budget) return null;
 
   let selection = selectPeriodForQuery(budget.periods, query);
-  if (!selection.period) {
-    await ensureBudgetPeriodWithRecurringData(
-      budgetId,
-      {
-        year: selection.year,
-        month: selection.month
-      },
-      userId
-    );
-    budget = await getBudgetWorkspaceData(budgetId);
-    if (!budget) return null;
-    selection = selectPeriodForQuery(budget.periods, query);
-  }
+  await ensureBudgetPeriodWithRecurringData(
+    budgetId,
+    {
+      year: selection.year,
+      month: selection.month
+    },
+    userId
+  );
+  budget = await getBudgetWorkspaceData(budgetId);
+  if (!budget) return null;
+  selection = selectPeriodForQuery(budget.periods, query);
 
   return {
     budget,

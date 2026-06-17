@@ -9,6 +9,21 @@ export type PeriodTarget = {
 };
 
 type Tx = Prisma.TransactionClient;
+type BudgetPeriodWithRecurringData = Prisma.BudgetPeriodGetPayload<{
+  include: {
+    incomes: true;
+    expenses: true;
+    debts: true;
+    savingGoals: true;
+  };
+}>;
+
+const periodWithRecurringDataInclude = {
+  incomes: true,
+  expenses: true,
+  debts: true,
+  savingGoals: true
+} satisfies Prisma.BudgetPeriodInclude;
 
 function normalizePeriodTarget(target: PeriodTarget) {
   if (!Number.isInteger(target.year) || target.year < 2000 || target.year > 2100) {
@@ -26,82 +41,150 @@ export function periodStartDate(period: { year: number; month: number }) {
   return new Date(Date.UTC(period.year, period.month - 1, 1));
 }
 
-function monthsBetweenPeriods(from: { year: number; month: number }, to: { year: number; month: number }) {
-  return Math.max((to.year - from.year) * 12 + (to.month - from.month), 1);
+function periodOrdinal(period: { year: number; month: number }) {
+  return period.year * 12 + period.month;
 }
 
-function isInheritedIncome(income: { amountType: string; frequency: string; isActive: boolean }) {
+function monthsBetweenPeriods(from: { year: number; month: number }, to: { year: number; month: number }) {
+  return Math.max(periodOrdinal(to) - periodOrdinal(from), 1);
+}
+
+function periodIsBeforeOrSame(left: { year: number; month: number }, right: { year: number; month: number }) {
+  return periodOrdinal(left) <= periodOrdinal(right);
+}
+
+function periodIsAfterOrSame(left: { year: number; month: number }, right: { year: number; month: number }) {
+  return periodOrdinal(left) >= periodOrdinal(right);
+}
+
+function periodRangeWhere(from: { year: number; month: number }, to: { year: number; month: number }) {
+  return {
+    AND: [
+      {
+        OR: [
+          {
+            year: {
+              gt: from.year
+            }
+          },
+          {
+            year: from.year,
+            month: {
+              gte: from.month
+            }
+          }
+        ]
+      },
+      {
+        OR: [
+          {
+            year: {
+              lt: to.year
+            }
+          },
+          {
+            year: to.year,
+            month: {
+              lte: to.month
+            }
+          }
+        ]
+      }
+    ]
+  };
+}
+
+function isInheritedIncome(
+  income: { amountType: string; frequency: string; isActive: boolean; endDate?: Date | null },
+  period: { year: number; month: number }
+) {
   return (
     income.isActive &&
     income.amountType === "FIXED" &&
     income.frequency !== "ONE_TIME" &&
-    income.frequency !== "IRREGULAR"
+    income.frequency !== "IRREGULAR" &&
+    (!income.endDate || income.endDate >= periodStartDate(period))
   );
 }
 
-export async function getOrCreateBudgetPeriod(
+function isInheritedExpense(expense: { amountType: string; isRecurring: boolean; isActive: boolean }) {
+  return expense.amountType === "FIXED" && expense.isRecurring && expense.isActive;
+}
+
+function isInheritedDebt(debt: { status: string; pendingBalance: Prisma.Decimal; remainingMonths: number }) {
+  return debt.status === "ACTIVE" && (Number(debt.pendingBalance) > 0 || debt.remainingMonths > 0);
+}
+
+async function getPeriodWithRecurringData(tx: Tx, periodId: string) {
+  return tx.budgetPeriod.findUnique({
+    where: {
+      id: periodId
+    },
+    include: periodWithRecurringDataInclude
+  });
+}
+
+async function findSyncSourcePeriod(
   tx: Tx,
   budgetId: string,
-  target: PeriodTarget,
-  userId?: string
+  target: { year: number; month: number }
 ) {
-  const periodTarget = normalizePeriodTarget(target);
-  const existing = await tx.budgetPeriod.findUnique({
+  const active = await tx.budgetPeriod.findFirst({
     where: {
-      budgetId_year_month: {
-        budgetId,
-        year: periodTarget.year,
-        month: periodTarget.month
-      }
-    }
+      budgetId,
+      status: "ACTIVE",
+      OR: [
+        {
+          year: {
+            lt: target.year
+          }
+        },
+        {
+          year: target.year,
+          month: {
+            lte: target.month
+          }
+        }
+      ]
+    },
+    include: periodWithRecurringDataInclude,
+    orderBy: [{ year: "desc" }, { month: "desc" }]
   });
 
-  if (existing) return existing;
+  if (active) return active;
 
-  const existingPeriods = await tx.budgetPeriod.count({
-    where: {
-      budgetId
-    }
-  });
-  const previous = await tx.budgetPeriod.findFirst({
+  return tx.budgetPeriod.findFirst({
     where: {
       budgetId,
       OR: [
         {
           year: {
-            lt: periodTarget.year
+            lt: target.year
           }
         },
         {
-          year: periodTarget.year,
+          year: target.year,
           month: {
-            lt: periodTarget.month
+            lt: target.month
           }
         }
       ]
     },
-    include: {
-      incomes: true,
-      expenses: true,
-      debts: true,
-      savingGoals: true
-    },
+    include: periodWithRecurringDataInclude,
     orderBy: [{ year: "desc" }, { month: "desc" }]
   });
+}
 
-  const period = await tx.budgetPeriod.create({
-    data: {
-      budgetId,
-      year: periodTarget.year,
-      month: periodTarget.month,
-      status: existingPeriods === 0 ? "ACTIVE" : "DRAFT"
-    }
-  });
-
-  if (!previous) return period;
+async function inheritRecurringData(
+  tx: Tx,
+  previous: BudgetPeriodWithRecurringData,
+  period: BudgetPeriodWithRecurringData,
+  userId?: string
+) {
+  if (!periodIsBeforeOrSame(previous, period) || previous.id === period.id) return;
 
   const monthDelta = monthsBetweenPeriods(previous, period);
-  const inheritedIncomes = previous.incomes.filter(isInheritedIncome).map((income) => {
+  const inheritedIncomes = previous.incomes.filter((income) => isInheritedIncome(income, period)).map((income) => {
     const calculationInput = {
       amount: income.amount,
       frequency: income.frequency,
@@ -146,9 +229,7 @@ export async function getOrCreateBudgetPeriod(
     });
   }
 
-  const inheritedExpenses = previous.expenses.filter((expense) => (
-    expense.amountType === "FIXED" && expense.isRecurring && expense.isActive
-  )).map((expense) => ({
+  const inheritedExpenses = previous.expenses.filter(isInheritedExpense).map((expense) => ({
     budgetPeriodId: period.id,
     name: expense.name,
     responsibleName: expense.responsibleName,
@@ -186,10 +267,7 @@ export async function getOrCreateBudgetPeriod(
   }
 
   const inheritedDebts = previous.debts
-    .filter((debt) => (
-      debt.status === "ACTIVE" &&
-      (Number(debt.pendingBalance) > 0 || debt.remainingMonths > 0)
-    ))
+    .filter(isInheritedDebt)
     .map((debt) => {
       const nextPendingBalance = Math.max(Number(debt.pendingBalance) - Number(debt.monthlyPayment) * monthDelta, 0);
       const nextPendingBalanceOriginal = Math.max(
@@ -256,8 +334,84 @@ export async function getOrCreateBudgetPeriod(
       skipDuplicates: true
     });
   }
+}
 
-  return period;
+async function syncRecurringDataUpToPeriod(
+  tx: Tx,
+  budgetId: string,
+  target: BudgetPeriodWithRecurringData,
+  userId?: string
+) {
+  const source = await findSyncSourcePeriod(tx, budgetId, target);
+  if (!source || source.id === target.id || !periodIsBeforeOrSame(source, target)) return target;
+
+  const periods = await tx.budgetPeriod.findMany({
+    where: {
+      budgetId,
+      ...periodRangeWhere(source, target)
+    },
+    include: periodWithRecurringDataInclude,
+    orderBy: [{ year: "asc" }, { month: "asc" }]
+  });
+
+  let previous = periods.find((period) => period.id === source.id) ?? source;
+  let refreshedTarget = target;
+
+  for (const period of periods) {
+    if (period.id === previous.id) continue;
+    if (!periodIsAfterOrSame(period, previous) || periodOrdinal(period) > periodOrdinal(target)) continue;
+
+    await inheritRecurringData(tx, previous, period, userId);
+    const refreshed = await getPeriodWithRecurringData(tx, period.id);
+    if (!refreshed) {
+      throw new Error("No se pudo sincronizar el periodo presupuestario.");
+    }
+
+    previous = refreshed;
+    if (period.id === target.id) refreshedTarget = refreshed;
+  }
+
+  return refreshedTarget;
+}
+
+export async function getOrCreateBudgetPeriod(
+  tx: Tx,
+  budgetId: string,
+  target: PeriodTarget,
+  userId?: string
+) {
+  const periodTarget = normalizePeriodTarget(target);
+  const existing = await tx.budgetPeriod.findUnique({
+    where: {
+      budgetId_year_month: {
+        budgetId,
+        year: periodTarget.year,
+        month: periodTarget.month
+      }
+    },
+    include: periodWithRecurringDataInclude
+  });
+
+  if (existing) {
+    return syncRecurringDataUpToPeriod(tx, budgetId, existing, userId);
+  }
+
+  const existingPeriods = await tx.budgetPeriod.count({
+    where: {
+      budgetId
+    }
+  });
+  const period = await tx.budgetPeriod.create({
+    data: {
+      budgetId,
+      year: periodTarget.year,
+      month: periodTarget.month,
+      status: existingPeriods === 0 ? "ACTIVE" : "DRAFT"
+    },
+    include: periodWithRecurringDataInclude
+  });
+
+  return syncRecurringDataUpToPeriod(tx, budgetId, period, userId);
 }
 
 export async function ensureBudgetPeriodWithRecurringData(
