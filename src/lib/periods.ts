@@ -30,8 +30,13 @@ function monthsBetweenPeriods(from: { year: number; month: number }, to: { year:
   return Math.max((to.year - from.year) * 12 + (to.month - from.month), 1);
 }
 
-function isInheritedIncome(income: { frequency: string; isActive: boolean }) {
-  return income.isActive && income.frequency !== "ONE_TIME" && income.frequency !== "IRREGULAR";
+function isInheritedIncome(income: { amountType: string; frequency: string; isActive: boolean }) {
+  return (
+    income.isActive &&
+    income.amountType === "FIXED" &&
+    income.frequency !== "ONE_TIME" &&
+    income.frequency !== "IRREGULAR"
+  );
 }
 
 export async function getOrCreateBudgetPeriod(
@@ -110,6 +115,13 @@ export async function getOrCreateBudgetPeriod(
     return {
       budgetPeriodId: period.id,
       responsibleName: income.responsibleName,
+      responsibleMemberId: income.responsibleMemberId,
+      currencyId: income.currencyId,
+      currencyCode: income.currencyCode,
+      currencySymbol: income.currencySymbol,
+      amountOriginal: income.amountOriginal,
+      exchangeRateToDop: income.exchangeRateToDop,
+      amountDop: income.amountDop,
       amount: income.amount,
       amountType: income.amountType,
       frequency: income.frequency,
@@ -135,11 +147,23 @@ export async function getOrCreateBudgetPeriod(
     });
   }
 
-  const inheritedExpenses = previous.expenses.filter((expense) => expense.isRecurring && expense.isActive).map((expense) => ({
+  const inheritedExpenses = previous.expenses.filter((expense) => (
+    expense.amountType === "FIXED" && expense.isRecurring && expense.isActive
+  )).map((expense) => ({
     budgetPeriodId: period.id,
     name: expense.name,
     responsibleName: expense.responsibleName,
+    responsibleMemberId: expense.responsibleMemberId,
     categoryId: expense.categoryId,
+    currencyId: expense.currencyId,
+    currencyCode: expense.currencyCode,
+    currencySymbol: expense.currencySymbol,
+    amountType: expense.amountType,
+    amountBudgetedOriginal: expense.amountBudgetedOriginal,
+    amountQ1Original: expense.amountQ1Original,
+    amountQ2Original: expense.amountQ2Original,
+    exchangeRateToDop: expense.exchangeRateToDop,
+    amountBudgetedDop: expense.amountBudgetedDop,
     amountBudgetedMonthly: expense.amountBudgetedMonthly,
     amountQ1: expense.amountQ1,
     amountQ2: expense.amountQ2,
@@ -163,9 +187,16 @@ export async function getOrCreateBudgetPeriod(
   }
 
   const inheritedDebts = previous.debts
-    .filter((debt) => debt.status !== "PAID" && debt.status !== "CANCELLED")
+    .filter((debt) => (
+      debt.status === "ACTIVE" &&
+      (Number(debt.pendingBalance) > 0 || debt.remainingMonths > 0)
+    ))
     .map((debt) => {
       const nextPendingBalance = Math.max(Number(debt.pendingBalance) - Number(debt.monthlyPayment) * monthDelta, 0);
+      const nextPendingBalanceOriginal = Math.max(
+        Number(debt.pendingBalanceOriginal) - Number(debt.monthlyPaymentOriginal) * monthDelta,
+        0
+      );
       const nextRemainingMonths = Math.max(debt.remainingMonths - monthDelta, 0);
       const estimatedCloseDate = periodStartDate(period);
       estimatedCloseDate.setUTCMonth(estimatedCloseDate.getUTCMonth() + nextRemainingMonths);
@@ -175,6 +206,15 @@ export async function getOrCreateBudgetPeriod(
         name: debt.name,
         entity: debt.entity,
         responsibleName: debt.responsibleName,
+        responsibleMemberId: debt.responsibleMemberId,
+        currencyId: debt.currencyId,
+        currencyCode: debt.currencyCode,
+        currencySymbol: debt.currencySymbol,
+        pendingBalanceOriginal: nextPendingBalanceOriginal,
+        monthlyPaymentOriginal: debt.monthlyPaymentOriginal,
+        exchangeRateToDop: debt.exchangeRateToDop,
+        pendingBalanceDop: nextPendingBalance,
+        monthlyPaymentDop: debt.monthlyPayment,
         pendingBalance: nextPendingBalance,
         monthlyPayment: debt.monthlyPayment,
         annualInterestRate: debt.annualInterestRate,
@@ -183,12 +223,13 @@ export async function getOrCreateBudgetPeriod(
         strategy: debt.strategy,
         startDate: debt.startDate,
         estimatedCloseDate,
-        status: nextPendingBalance <= 0 ? "PAID" as const : debt.status,
+        status: "ACTIVE" as const,
         notes: debt.notes,
         createdById: userId ?? debt.createdById,
         updatedById: userId ?? debt.updatedById
       };
-    });
+    })
+    .filter((debt) => Number(debt.pendingBalance) > 0 || debt.remainingMonths > 0);
 
   if (inheritedDebts.length > 0) {
     await tx.debt.createMany({

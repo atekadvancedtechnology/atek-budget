@@ -2,6 +2,7 @@ import { z } from "zod";
 
 const money = z.coerce.number().min(0, "El monto no puede ser negativo.");
 const positiveMoney = z.coerce.number().positive("El monto debe ser mayor que cero.");
+const exchangeRate = z.coerce.number().positive("La tasa debe ser mayor que cero.");
 
 export const createBudgetSchema = z.object({
   workspaceName: z.string().min(2, "El nombre del hogar es obligatorio."),
@@ -9,7 +10,10 @@ export const createBudgetSchema = z.object({
 });
 
 export const incomeSchema = z.object({
+  responsibleMemberId: z.string().optional(),
   responsibleName: z.string().min(1, "El responsable es obligatorio."),
+  currencyId: z.string().optional(),
+  exchangeRateToDop: exchangeRate.default(1),
   source: z.string().min(1, "La fuente es obligatoria."),
   amount: money,
   amountType: z.enum(["FIXED", "VARIABLE", "ESTIMATED"]),
@@ -36,7 +40,10 @@ export const incomeSchema = z.object({
 
 export const incomeReceiptSchema = z.object({
   incomeId: z.string().optional(),
+  responsibleMemberId: z.string().optional(),
   responsibleName: z.string().min(1, "El responsable es obligatorio."),
+  currencyId: z.string().optional(),
+  exchangeRateToDop: exchangeRate.default(1),
   source: z.string().min(1, "La fuente es obligatoria."),
   amount: money,
   receivedDate: z.string().min(1, "La fecha recibida es obligatoria."),
@@ -45,8 +52,12 @@ export const incomeReceiptSchema = z.object({
 
 export const expenseSchema = z.object({
   name: z.string().min(1, "El nombre del gasto es obligatorio."),
+  responsibleMemberId: z.string().optional(),
   responsibleName: z.string().min(1, "El responsable es obligatorio."),
-  categoryId: z.string().min(1, "La categoría es obligatoria."),
+  categoryId: z.string().min(1, "La categoria es obligatoria."),
+  currencyId: z.string().optional(),
+  exchangeRateToDop: exchangeRate.default(1),
+  amountType: z.enum(["FIXED", "VARIABLE", "ESTIMATED"]).default("FIXED"),
   amountBudgetedMonthly: money,
   amountQ1: money,
   amountQ2: money,
@@ -60,16 +71,19 @@ export const expenseSchema = z.object({
 export const expensePaymentSchema = z.object({
   expenseId: z.string().optional(),
   name: z.string().min(1, "El nombre del gasto es obligatorio."),
+  responsibleMemberId: z.string().optional(),
   responsibleName: z.string().min(1, "El responsable es obligatorio."),
-  categoryId: z.string().min(1, "La categoría es obligatoria."),
+  categoryId: z.string().min(1, "La categoria es obligatoria."),
   bankAccountId: z.string().optional(),
+  currencyId: z.string().optional(),
+  exchangeRateToDop: exchangeRate.default(1),
   amount: positiveMoney,
   paidDate: z.string().min(1, "La fecha de pago es obligatoria."),
   notes: z.string().optional()
 });
 
 export const expenseCategorySchema = z.object({
-  name: z.string().trim().min(1, "El nombre de la categoría es obligatorio."),
+  name: z.string().trim().min(1, "El nombre de la categoria es obligatorio."),
   icon: z.string().trim().optional(),
   recommendedMaxPercent: z.coerce
     .number()
@@ -84,10 +98,27 @@ export const bankAccountSchema = z.object({
   notes: z.string().trim().optional()
 });
 
+export const currencySchema = z.object({
+  code: z
+    .string()
+    .trim()
+    .min(2, "El codigo es obligatorio.")
+    .max(10, "El codigo es muy largo.")
+    .transform((value) => value.toUpperCase()),
+  name: z.string().trim().min(1, "El nombre de la moneda es obligatorio."),
+  symbol: z.string().trim().min(1, "El simbolo es obligatorio."),
+  defaultRateToDop: exchangeRate.default(1),
+  isBase: z.coerce.boolean().default(false),
+  isActive: z.coerce.boolean().default(true)
+});
+
 export const debtSchema = z.object({
   name: z.string().min(1, "El nombre de la deuda es obligatorio."),
   entity: z.string().min(1, "La entidad es obligatoria."),
+  responsibleMemberId: z.string().optional(),
   responsibleName: z.string().min(1, "El responsable es obligatorio."),
+  currencyId: z.string().optional(),
+  exchangeRateToDop: exchangeRate.default(1),
   pendingBalance: money,
   monthlyPayment: money,
   annualInterestRate: money,
@@ -101,12 +132,12 @@ export const savingGoalSchema = z.object({
   monthlyTarget: money,
   contributedThisMonth: money,
   accumulatedBalance: money,
-  institution: z.string().min(1, "La institución es obligatoria."),
+  institution: z.string().min(1, "La institucion es obligatoria."),
   priority: z.coerce.number().int().min(1).max(4),
   notes: z.string().optional()
 });
 
 export const invitationSchema = z.object({
-  email: z.string().email("Debes introducir un email válido."),
+  email: z.string().email("Debes introducir un email valido."),
   role: z.enum(["EDITOR", "VIEWER"])
 });

@@ -8,6 +8,7 @@ import { requireBudgetRole, requireUser } from "@/lib/authorization";
 import {
   bankAccountSchema,
   createBudgetSchema,
+  currencySchema,
   debtSchema,
   expenseCategorySchema,
   expensePaymentSchema,
@@ -102,6 +103,174 @@ function parsePaymentDays(value?: string) {
     .filter((day) => Number.isInteger(day) && day >= 1 && day <= 31);
 }
 
+function roundMoney(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function displayMemberName(member: {
+  user: {
+    name: string | null;
+    email: string | null;
+  };
+}) {
+  return member.user.name || member.user.email || "Miembro";
+}
+
+async function resolveResponsibleMember(
+  tx: Tx,
+  budgetId: string,
+  input: {
+    responsibleMemberId?: string;
+    responsibleName: string;
+  }
+) {
+  const responsibleMemberId = input.responsibleMemberId?.trim();
+
+  if (responsibleMemberId) {
+    const member = await tx.workspaceMember.findFirst({
+      where: {
+        id: responsibleMemberId,
+        workspace: {
+          budgets: {
+            some: {
+              id: budgetId
+            }
+          }
+        }
+      },
+      include: {
+        user: true
+      }
+    });
+
+    if (!member) {
+      throw new Error("El responsable seleccionado no pertenece a este presupuesto.");
+    }
+
+    return {
+      responsibleMemberId: member.id,
+      responsibleName: displayMemberName(member)
+    };
+  }
+
+  const responsibleName = input.responsibleName.trim();
+  const matchedMember = await tx.workspaceMember.findFirst({
+    where: {
+      workspace: {
+        budgets: {
+          some: {
+            id: budgetId
+          }
+        }
+      },
+      OR: [
+        {
+          user: {
+            name: {
+              equals: responsibleName,
+              mode: "insensitive"
+            }
+          }
+        },
+        {
+          user: {
+            email: {
+              equals: responsibleName,
+              mode: "insensitive"
+            }
+          }
+        }
+      ]
+    },
+    include: {
+      user: true
+    }
+  });
+
+  if (matchedMember) {
+    return {
+      responsibleMemberId: matchedMember.id,
+      responsibleName: displayMemberName(matchedMember)
+    };
+  }
+
+  return {
+    responsibleMemberId: null,
+    responsibleName
+  };
+}
+
+async function ensureDopCurrency(tx: Tx, budgetId: string) {
+  return tx.currency.upsert({
+    where: {
+      budgetId_code: {
+        budgetId,
+        code: "DOP"
+      }
+    },
+    update: {
+      name: "Peso Dominicano",
+      symbol: "RD$",
+      defaultRateToDop: 1,
+      isBase: true,
+      isActive: true
+    },
+    create: {
+      budgetId,
+      code: "DOP",
+      name: "Peso Dominicano",
+      symbol: "RD$",
+      defaultRateToDop: 1,
+      isBase: true,
+      isActive: true
+    }
+  });
+}
+
+async function resolveCurrency(
+  tx: Tx,
+  budgetId: string,
+  input: {
+    currencyId?: string;
+    exchangeRateToDop?: number;
+  }
+) {
+  const currencyId = input.currencyId?.trim();
+  const currency = currencyId
+    ? await tx.currency.findFirst({
+        where: {
+          id: currencyId,
+          budgetId
+        }
+      })
+    : await tx.currency.findFirst({
+        where: {
+          budgetId,
+          isBase: true
+        }
+      });
+
+  const selectedCurrency = currency ?? (await ensureDopCurrency(tx, budgetId));
+  const exchangeRateToDop = selectedCurrency.isBase || selectedCurrency.code === "DOP"
+    ? 1
+    : Number(input.exchangeRateToDop ?? selectedCurrency.defaultRateToDop);
+
+  if (!Number.isFinite(exchangeRateToDop) || exchangeRateToDop <= 0) {
+    throw new Error("La tasa de conversion debe ser mayor que cero.");
+  }
+
+  return {
+    currencyId: selectedCurrency.id,
+    currencyCode: selectedCurrency.code,
+    currencySymbol: selectedCurrency.symbol,
+    exchangeRateToDop
+  };
+}
+
+function convertToDop(amount: number, exchangeRateToDop: number) {
+  return roundMoney(amount * exchangeRateToDop);
+}
+
 async function audit(
   tx: Tx,
   input: {
@@ -158,6 +327,18 @@ export async function createBudgetAction(raw: unknown) {
         savingTargetPercent: 10,
         emergencyFundTarget: 0,
         emergencyFundCurrent: 0
+      }
+    });
+
+    await tx.currency.create({
+      data: {
+        budgetId: createdBudget.id,
+        code: "DOP",
+        name: "Peso Dominicano",
+        symbol: "RD$",
+        defaultRateToDop: 1,
+        isBase: true,
+        isActive: true
       }
     });
 
@@ -269,11 +450,14 @@ export async function createIncomeAction(budgetId: string, periodTarget: PeriodT
 
   await prisma.$transaction(async (tx) => {
     const period = await getOrCreateBudgetPeriodWithInheritance(tx, budgetId, periodTarget, access.user.id);
+    const responsible = await resolveResponsibleMember(tx, budgetId, data);
+    const currency = await resolveCurrency(tx, budgetId, data);
+    const amountDop = convertToDop(data.amount, currency.exchangeRateToDop);
     const expectedPaymentDays = parsePaymentDays(data.expectedPaymentDays);
     const startDate = new Date(data.startDate);
     const endDate = data.endDate ? new Date(data.endDate) : null;
     const incomeForCalculation = {
-      amount: data.amount,
+      amount: amountDop,
       frequency: data.frequency,
       startDate,
       endDate,
@@ -284,9 +468,16 @@ export async function createIncomeAction(budgetId: string, periodTarget: PeriodT
     const fortnight = expectedIncomeByFortnight(incomeForCalculation, period.year, period.month);
     const income = await tx.income.create({
       data: {
-        responsibleName: data.responsibleName,
+        responsibleName: responsible.responsibleName,
+        responsibleMemberId: responsible.responsibleMemberId,
+        currencyId: currency.currencyId,
+        currencyCode: currency.currencyCode,
+        currencySymbol: currency.currencySymbol,
+        amountOriginal: data.amount,
+        exchangeRateToDop: currency.exchangeRateToDop,
+        amountDop,
         source: data.source,
-        amount: data.amount,
+        amount: amountDop,
         amountType: data.amountType,
         frequency: data.frequency,
         startDate,
@@ -312,7 +503,9 @@ export async function createIncomeAction(budgetId: string, periodTarget: PeriodT
       action: "CREATE_INCOME",
       newValue: {
         responsibleName: income.responsibleName,
-        amount: Number(data.amount),
+        amountOriginal: Number(data.amount),
+        amountDop,
+        currencyCode: income.currencyCode,
         amountType: income.amountType,
         frequency: income.frequency,
         source: income.source
@@ -345,10 +538,13 @@ export async function updateIncomeAction(budgetId: string, incomeId: string, raw
     }
 
     const expectedPaymentDays = parsePaymentDays(data.expectedPaymentDays);
+    const responsible = await resolveResponsibleMember(tx, budgetId, data);
+    const currency = await resolveCurrency(tx, budgetId, data);
+    const amountDop = convertToDop(data.amount, currency.exchangeRateToDop);
     const startDate = new Date(data.startDate);
     const endDate = data.endDate ? new Date(data.endDate) : null;
     const incomeForCalculation = {
-      amount: data.amount,
+      amount: amountDop,
       frequency: data.frequency,
       startDate,
       endDate,
@@ -362,9 +558,16 @@ export async function updateIncomeAction(budgetId: string, incomeId: string, raw
         id: existing.id
       },
       data: {
-        responsibleName: data.responsibleName,
+        responsibleName: responsible.responsibleName,
+        responsibleMemberId: responsible.responsibleMemberId,
+        currencyId: currency.currencyId,
+        currencyCode: currency.currencyCode,
+        currencySymbol: currency.currencySymbol,
+        amountOriginal: data.amount,
+        exchangeRateToDop: currency.exchangeRateToDop,
+        amountDop,
         source: data.source,
-        amount: data.amount,
+        amount: amountDop,
         amountType: data.amountType,
         frequency: data.frequency,
         startDate,
@@ -387,6 +590,7 @@ export async function updateIncomeAction(budgetId: string, incomeId: string, raw
         },
         data: {
           responsibleName: income.responsibleName,
+          responsibleMemberId: income.responsibleMemberId,
           source: income.source
         }
       });
@@ -402,6 +606,8 @@ export async function updateIncomeAction(budgetId: string, incomeId: string, raw
         responsibleName: existing.responsibleName,
         source: existing.source,
         amount: Number(existing.amount),
+        amountOriginal: Number(existing.amountOriginal),
+        currencyCode: existing.currencyCode,
         amountType: existing.amountType,
         frequency: existing.frequency,
         isActive: existing.isActive
@@ -410,6 +616,8 @@ export async function updateIncomeAction(budgetId: string, incomeId: string, raw
         responsibleName: income.responsibleName,
         source: income.source,
         amount: Number(income.amount),
+        amountOriginal: Number(income.amountOriginal),
+        currencyCode: income.currencyCode,
         amountType: income.amountType,
         frequency: income.frequency,
         isActive: income.isActive
@@ -469,7 +677,14 @@ export async function createIncomeReceiptAction(budgetId: string, periodTarget: 
 
   await prisma.$transaction(async (tx) => {
     const period = await getOrCreateBudgetPeriodWithInheritance(tx, budgetId, periodTarget, access.user.id);
-    let linkedIncome: { id: string; responsibleName: string; source: string } | null = null;
+    let linkedIncome: {
+      id: string;
+      responsibleName: string;
+      responsibleMemberId: string | null;
+      source: string;
+      currencyId: string | null;
+      exchangeRateToDop: Prisma.Decimal;
+    } | null = null;
 
     if (data.incomeId) {
       linkedIncome = await tx.income.findFirst({
@@ -480,6 +695,9 @@ export async function createIncomeReceiptAction(budgetId: string, periodTarget: 
         select: {
           id: true,
           responsibleName: true,
+          responsibleMemberId: true,
+          currencyId: true,
+          exchangeRateToDop: true,
           source: true
         }
       });
@@ -489,13 +707,32 @@ export async function createIncomeReceiptAction(budgetId: string, periodTarget: 
       }
     }
 
+    const responsible = linkedIncome
+      ? {
+          responsibleMemberId: linkedIncome.responsibleMemberId,
+          responsibleName: linkedIncome.responsibleName
+        }
+      : await resolveResponsibleMember(tx, budgetId, data);
+    const currency = await resolveCurrency(tx, budgetId, {
+      currencyId: data.currencyId || linkedIncome?.currencyId || undefined,
+      exchangeRateToDop: data.exchangeRateToDop || Number(linkedIncome?.exchangeRateToDop ?? 1)
+    });
+    const amountDop = convertToDop(data.amount, currency.exchangeRateToDop);
+
     const receipt = await tx.incomeReceipt.create({
       data: {
         budgetPeriodId: period.id,
         incomeId: linkedIncome?.id ?? null,
-        responsibleName: linkedIncome?.responsibleName ?? data.responsibleName,
+        responsibleName: responsible.responsibleName,
+        responsibleMemberId: responsible.responsibleMemberId,
+        currencyId: currency.currencyId,
+        currencyCode: currency.currencyCode,
+        currencySymbol: currency.currencySymbol,
+        amountOriginal: data.amount,
+        exchangeRateToDop: currency.exchangeRateToDop,
+        amountDop,
         source: linkedIncome?.source ?? data.source,
-        amount: data.amount,
+        amount: amountDop,
         receivedDate: new Date(data.receivedDate),
         notes: data.notes,
         createdById: access.user.id
@@ -511,7 +748,9 @@ export async function createIncomeReceiptAction(budgetId: string, periodTarget: 
       newValue: {
         responsibleName: receipt.responsibleName,
         source: receipt.source,
-        amount: Number(data.amount),
+        amountOriginal: Number(data.amount),
+        amountDop,
+        currencyCode: receipt.currencyCode,
         receivedDate: data.receivedDate
       }
     });
@@ -541,7 +780,14 @@ export async function updateIncomeReceiptAction(budgetId: string, receiptId: str
       throw new Error("No se encontró el ingreso recibido en este presupuesto.");
     }
 
-    let linkedIncome: { id: string; responsibleName: string; source: string } | null = null;
+    let linkedIncome: {
+      id: string;
+      responsibleName: string;
+      responsibleMemberId: string | null;
+      source: string;
+      currencyId: string | null;
+      exchangeRateToDop: Prisma.Decimal;
+    } | null = null;
 
     if (data.incomeId) {
       linkedIncome = await tx.income.findFirst({
@@ -552,6 +798,9 @@ export async function updateIncomeReceiptAction(budgetId: string, receiptId: str
         select: {
           id: true,
           responsibleName: true,
+          responsibleMemberId: true,
+          currencyId: true,
+          exchangeRateToDop: true,
           source: true
         }
       });
@@ -561,15 +810,34 @@ export async function updateIncomeReceiptAction(budgetId: string, receiptId: str
       }
     }
 
+    const responsible = linkedIncome
+      ? {
+          responsibleMemberId: linkedIncome.responsibleMemberId,
+          responsibleName: linkedIncome.responsibleName
+        }
+      : await resolveResponsibleMember(tx, budgetId, data);
+    const currency = await resolveCurrency(tx, budgetId, {
+      currencyId: data.currencyId || linkedIncome?.currencyId || undefined,
+      exchangeRateToDop: data.exchangeRateToDop || Number(linkedIncome?.exchangeRateToDop ?? 1)
+    });
+    const amountDop = convertToDop(data.amount, currency.exchangeRateToDop);
+
     const receipt = await tx.incomeReceipt.update({
       where: {
         id: existing.id
       },
       data: {
         incomeId: linkedIncome?.id ?? null,
-        responsibleName: linkedIncome?.responsibleName ?? data.responsibleName,
+        responsibleName: responsible.responsibleName,
+        responsibleMemberId: responsible.responsibleMemberId,
+        currencyId: currency.currencyId,
+        currencyCode: currency.currencyCode,
+        currencySymbol: currency.currencySymbol,
+        amountOriginal: data.amount,
+        exchangeRateToDop: currency.exchangeRateToDop,
+        amountDop,
         source: linkedIncome?.source ?? data.source,
-        amount: data.amount,
+        amount: amountDop,
         receivedDate: new Date(data.receivedDate),
         notes: data.notes
       }
@@ -585,12 +853,16 @@ export async function updateIncomeReceiptAction(budgetId: string, receiptId: str
         responsibleName: existing.responsibleName,
         source: existing.source,
         amount: Number(existing.amount),
+        amountOriginal: Number(existing.amountOriginal),
+        currencyCode: existing.currencyCode,
         receivedDate: existing.receivedDate.toISOString()
       },
       newValue: {
         responsibleName: receipt.responsibleName,
         source: receipt.source,
         amount: Number(receipt.amount),
+        amountOriginal: Number(receipt.amountOriginal),
+        currencyCode: receipt.currencyCode,
         receivedDate: receipt.receivedDate.toISOString()
       }
     });
@@ -656,6 +928,170 @@ function revalidateBudgetAccountPaths(budgetId: string) {
   revalidatePath(`/app/budgets/${budgetId}/dashboard`);
   revalidatePath(`/app/budgets/${budgetId}/cashflow`);
   revalidatePath(`/app/budgets/${budgetId}/history`);
+}
+
+function revalidateBudgetCurrencyPaths(budgetId: string) {
+  revalidatePath(`/app/budgets/${budgetId}`);
+  revalidatePath(`/app/budgets/${budgetId}/settings`);
+  revalidatePath(`/app/budgets/${budgetId}/income`);
+  revalidatePath(`/app/budgets/${budgetId}/expenses`);
+  revalidatePath(`/app/budgets/${budgetId}/debts`);
+  revalidatePath(`/app/budgets/${budgetId}/dashboard`);
+}
+
+export async function createCurrencyAction(budgetId: string, raw: unknown) {
+  const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER, WorkspaceRole.EDITOR]);
+  const data = currencySchema.parse(raw);
+
+  await prisma.$transaction(async (tx) => {
+    const duplicate = await tx.currency.findFirst({
+      where: {
+        budgetId,
+        code: data.code
+      }
+    });
+
+    if (duplicate) {
+      throw new Error("Ya existe una moneda con ese codigo en este presupuesto.");
+    }
+
+    if (data.isBase) {
+      await tx.currency.updateMany({
+        where: {
+          budgetId,
+          isBase: true
+        },
+        data: {
+          isBase: false
+        }
+      });
+    }
+
+    const currency = await tx.currency.create({
+      data: {
+        budgetId,
+        code: data.code,
+        name: data.name,
+        symbol: data.symbol,
+        defaultRateToDop: data.isBase ? 1 : data.defaultRateToDop,
+        isBase: data.isBase,
+        isActive: data.isBase ? true : data.isActive
+      }
+    });
+
+    await audit(tx, {
+      workspaceId: access.budget.workspaceId,
+      userId: access.user.id,
+      entityType: "Currency",
+      entityId: currency.id,
+      action: "CREATE_CURRENCY",
+      newValue: {
+        code: currency.code,
+        name: currency.name,
+        symbol: currency.symbol,
+        defaultRateToDop: Number(currency.defaultRateToDop),
+        isBase: currency.isBase,
+        isActive: currency.isActive
+      }
+    });
+  });
+
+  revalidateBudgetCurrencyPaths(budgetId);
+}
+
+export async function updateCurrencyAction(budgetId: string, currencyId: string, raw: unknown) {
+  const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER, WorkspaceRole.EDITOR]);
+  const data = currencySchema.parse(raw);
+
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.currency.findFirst({
+      where: {
+        id: currencyId,
+        budgetId
+      }
+    });
+
+    if (!existing) {
+      throw new Error("No se encontro la moneda en este presupuesto.");
+    }
+
+    const duplicate = await tx.currency.findFirst({
+      where: {
+        budgetId,
+        code: data.code,
+        NOT: {
+          id: existing.id
+        }
+      }
+    });
+
+    if (duplicate) {
+      throw new Error("Ya existe otra moneda con ese codigo en este presupuesto.");
+    }
+
+    if (existing.isBase && !data.isBase) {
+      throw new Error("Primero marca otra moneda como base antes de quitar esta condicion.");
+    }
+
+    if (existing.isBase && !data.isActive) {
+      throw new Error("La moneda base no puede desactivarse.");
+    }
+
+    if (data.isBase) {
+      await tx.currency.updateMany({
+        where: {
+          budgetId,
+          isBase: true,
+          NOT: {
+            id: existing.id
+          }
+        },
+        data: {
+          isBase: false
+        }
+      });
+    }
+
+    const currency = await tx.currency.update({
+      where: {
+        id: existing.id
+      },
+      data: {
+        code: data.code,
+        name: data.name,
+        symbol: data.symbol,
+        defaultRateToDop: data.isBase ? 1 : data.defaultRateToDop,
+        isBase: data.isBase,
+        isActive: data.isBase ? true : data.isActive
+      }
+    });
+
+    await audit(tx, {
+      workspaceId: access.budget.workspaceId,
+      userId: access.user.id,
+      entityType: "Currency",
+      entityId: currency.id,
+      action: "UPDATE_CURRENCY",
+      oldValue: {
+        code: existing.code,
+        name: existing.name,
+        symbol: existing.symbol,
+        defaultRateToDop: Number(existing.defaultRateToDop),
+        isBase: existing.isBase,
+        isActive: existing.isActive
+      },
+      newValue: {
+        code: currency.code,
+        name: currency.name,
+        symbol: currency.symbol,
+        defaultRateToDop: Number(currency.defaultRateToDop),
+        isBase: currency.isBase,
+        isActive: currency.isActive
+      }
+    });
+  });
+
+  revalidateBudgetCurrencyPaths(budgetId);
 }
 
 function revalidateBudgetExpensePaths(budgetId: string) {
@@ -1023,20 +1459,35 @@ export async function deleteBankAccountAction(budgetId: string, accountId: strin
 export async function createExpenseAction(budgetId: string, periodTarget: PeriodTarget, raw: unknown) {
   const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER, WorkspaceRole.EDITOR]);
   const data = expenseSchema.parse(raw);
-  const actualAmount = data.actualAmount ?? 0;
-  const status = calculateExpenseStatus(actualAmount, data.amountBudgetedMonthly);
-  const difference = calculateExpenseDifference(actualAmount, data.amountBudgetedMonthly);
 
   await prisma.$transaction(async (tx) => {
     const period = await getOrCreateBudgetPeriodWithInheritance(tx, budgetId, periodTarget, access.user.id);
+    const responsible = await resolveResponsibleMember(tx, budgetId, data);
+    const currency = await resolveCurrency(tx, budgetId, data);
+    const amountBudgetedDop = convertToDop(data.amountBudgetedMonthly, currency.exchangeRateToDop);
+    const amountQ1Dop = convertToDop(data.amountQ1, currency.exchangeRateToDop);
+    const amountQ2Dop = convertToDop(data.amountQ2, currency.exchangeRateToDop);
+    const actualAmount = data.actualAmount == null ? 0 : convertToDop(data.actualAmount, currency.exchangeRateToDop);
+    const status = calculateExpenseStatus(actualAmount, amountBudgetedDop);
+    const difference = calculateExpenseDifference(actualAmount, amountBudgetedDop);
     const expense = await tx.expense.create({
       data: {
         name: data.name,
-        responsibleName: data.responsibleName,
+        responsibleName: responsible.responsibleName,
+        responsibleMemberId: responsible.responsibleMemberId,
         categoryId: data.categoryId,
-        amountBudgetedMonthly: data.amountBudgetedMonthly,
-        amountQ1: data.amountQ1,
-        amountQ2: data.amountQ2,
+        currencyId: currency.currencyId,
+        currencyCode: currency.currencyCode,
+        currencySymbol: currency.currencySymbol,
+        amountType: data.amountType,
+        amountBudgetedOriginal: data.amountBudgetedMonthly,
+        amountQ1Original: data.amountQ1,
+        amountQ2Original: data.amountQ2,
+        exchangeRateToDop: currency.exchangeRateToDop,
+        amountBudgetedDop,
+        amountBudgetedMonthly: amountBudgetedDop,
+        amountQ1: amountQ1Dop,
+        amountQ2: amountQ2Dop,
         bankAccountId: data.bankAccountId || null,
         actualAmount,
         difference,
@@ -1059,7 +1510,9 @@ export async function createExpenseAction(budgetId: string, periodTarget: Period
       action: "CREATE_EXPENSE",
       newValue: {
         name: expense.name,
-        amountBudgetedMonthly: Number(data.amountBudgetedMonthly),
+        amountBudgetedOriginal: Number(data.amountBudgetedMonthly),
+        amountBudgetedMonthly: amountBudgetedDop,
+        currencyCode: expense.currencyCode,
         actualAmount: Number(actualAmount),
         status
       }
@@ -1087,6 +1540,11 @@ export async function updateExpenseAction(budgetId: string, expenseId: string, r
       throw new Error("No se encontró el gasto en este presupuesto.");
     }
 
+    const responsible = await resolveResponsibleMember(tx, budgetId, data);
+    const currency = await resolveCurrency(tx, budgetId, data);
+    const amountBudgetedDop = convertToDop(data.amountBudgetedMonthly, currency.exchangeRateToDop);
+    const amountQ1Dop = convertToDop(data.amountQ1, currency.exchangeRateToDop);
+    const amountQ2Dop = convertToDop(data.amountQ2, currency.exchangeRateToDop);
     const paymentTotal = await tx.expensePayment.aggregate({
       where: {
         expenseId: existing.id
@@ -1098,9 +1556,11 @@ export async function updateExpenseAction(budgetId: string, expenseId: string, r
     });
     const actualAmount = paymentTotal._count > 0
       ? Number(paymentTotal._sum.amount ?? 0)
-      : data.actualAmount ?? Number(existing.actualAmount ?? 0);
-    const status = calculateExpenseStatus(actualAmount, data.amountBudgetedMonthly);
-    const difference = calculateExpenseDifference(actualAmount, data.amountBudgetedMonthly);
+      : data.actualAmount == null
+        ? Number(existing.actualAmount ?? 0)
+        : convertToDop(data.actualAmount, currency.exchangeRateToDop);
+    const status = calculateExpenseStatus(actualAmount, amountBudgetedDop);
+    const difference = calculateExpenseDifference(actualAmount, amountBudgetedDop);
 
     const expense = await tx.expense.update({
       where: {
@@ -1108,11 +1568,21 @@ export async function updateExpenseAction(budgetId: string, expenseId: string, r
       },
       data: {
         name: data.name,
-        responsibleName: data.responsibleName,
+        responsibleName: responsible.responsibleName,
+        responsibleMemberId: responsible.responsibleMemberId,
         categoryId: data.categoryId,
-        amountBudgetedMonthly: data.amountBudgetedMonthly,
-        amountQ1: data.amountQ1,
-        amountQ2: data.amountQ2,
+        currencyId: currency.currencyId,
+        currencyCode: currency.currencyCode,
+        currencySymbol: currency.currencySymbol,
+        amountType: data.amountType,
+        amountBudgetedOriginal: data.amountBudgetedMonthly,
+        amountQ1Original: data.amountQ1,
+        amountQ2Original: data.amountQ2,
+        exchangeRateToDop: currency.exchangeRateToDop,
+        amountBudgetedDop,
+        amountBudgetedMonthly: amountBudgetedDop,
+        amountQ1: amountQ1Dop,
+        amountQ2: amountQ2Dop,
         bankAccountId: data.bankAccountId || null,
         actualAmount,
         difference,
@@ -1137,6 +1607,7 @@ export async function updateExpenseAction(budgetId: string, expenseId: string, r
         data: {
           name: expense.name,
           responsibleName: expense.responsibleName,
+          responsibleMemberId: expense.responsibleMemberId,
           categoryId: expense.categoryId,
           bankAccountId: expense.bankAccountId
         }
@@ -1152,12 +1623,16 @@ export async function updateExpenseAction(budgetId: string, expenseId: string, r
       oldValue: {
         name: existing.name,
         amountBudgetedMonthly: Number(existing.amountBudgetedMonthly),
+        amountBudgetedOriginal: Number(existing.amountBudgetedOriginal),
+        currencyCode: existing.currencyCode,
         actualAmount: Number(existing.actualAmount),
         status: existing.status
       },
       newValue: {
         name: expense.name,
         amountBudgetedMonthly: Number(expense.amountBudgetedMonthly),
+        amountBudgetedOriginal: Number(expense.amountBudgetedOriginal),
+        currencyCode: expense.currencyCode,
         actualAmount: Number(expense.actualAmount),
         status: expense.status
       }
@@ -1227,8 +1702,11 @@ export async function createExpensePaymentAction(budgetId: string, periodTarget:
       id: string;
       name: string;
       responsibleName: string;
+      responsibleMemberId: string | null;
       categoryId: string;
       bankAccountId: string | null;
+      currencyId: string | null;
+      exchangeRateToDop: Prisma.Decimal;
     } | null = null;
 
     if (data.expenseId) {
@@ -1241,8 +1719,11 @@ export async function createExpensePaymentAction(budgetId: string, periodTarget:
           id: true,
           name: true,
           responsibleName: true,
+          responsibleMemberId: true,
           categoryId: true,
-          bankAccountId: true
+          bankAccountId: true,
+          currencyId: true,
+          exchangeRateToDop: true
         }
       });
 
@@ -1275,15 +1756,34 @@ export async function createExpensePaymentAction(budgetId: string, periodTarget:
       }
     }
 
+    const responsible = linkedExpense
+      ? {
+          responsibleMemberId: linkedExpense.responsibleMemberId,
+          responsibleName: linkedExpense.responsibleName
+        }
+      : await resolveResponsibleMember(tx, budgetId, data);
+    const currency = await resolveCurrency(tx, budgetId, {
+      currencyId: data.currencyId || linkedExpense?.currencyId || undefined,
+      exchangeRateToDop: data.exchangeRateToDop || Number(linkedExpense?.exchangeRateToDop ?? 1)
+    });
+    const amountDop = convertToDop(data.amount, currency.exchangeRateToDop);
+
     const payment = await tx.expensePayment.create({
       data: {
         budgetPeriodId: period.id,
         expenseId: linkedExpense?.id ?? null,
         name: linkedExpense?.name ?? data.name,
-        responsibleName: linkedExpense?.responsibleName ?? data.responsibleName,
+        responsibleName: responsible.responsibleName,
+        responsibleMemberId: responsible.responsibleMemberId,
         categoryId: linkedExpense?.categoryId ?? data.categoryId,
         bankAccountId: (linkedExpense?.bankAccountId ?? data.bankAccountId) || null,
-        amount: data.amount,
+        currencyId: currency.currencyId,
+        currencyCode: currency.currencyCode,
+        currencySymbol: currency.currencySymbol,
+        amountOriginal: data.amount,
+        exchangeRateToDop: currency.exchangeRateToDop,
+        amountDop,
+        amount: amountDop,
         paidDate,
         notes: data.notes,
         createdById: access.user.id
@@ -1303,7 +1803,9 @@ export async function createExpensePaymentAction(budgetId: string, periodTarget:
       newValue: {
         expenseId: payment.expenseId,
         name: payment.name,
+        amountOriginal: Number(payment.amountOriginal),
         amount: Number(payment.amount),
+        currencyCode: payment.currencyCode,
         paidDate: payment.paidDate.toISOString()
       }
     });
@@ -1339,8 +1841,11 @@ export async function updateExpensePaymentAction(budgetId: string, paymentId: st
       id: string;
       name: string;
       responsibleName: string;
+      responsibleMemberId: string | null;
       categoryId: string;
       bankAccountId: string | null;
+      currencyId: string | null;
+      exchangeRateToDop: Prisma.Decimal;
     } | null = null;
 
     if (data.expenseId) {
@@ -1353,8 +1858,11 @@ export async function updateExpensePaymentAction(budgetId: string, paymentId: st
           id: true,
           name: true,
           responsibleName: true,
+          responsibleMemberId: true,
           categoryId: true,
-          bankAccountId: true
+          bankAccountId: true,
+          currencyId: true,
+          exchangeRateToDop: true
         }
       });
 
@@ -1387,6 +1895,18 @@ export async function updateExpensePaymentAction(budgetId: string, paymentId: st
       }
     }
 
+    const responsible = linkedExpense
+      ? {
+          responsibleMemberId: linkedExpense.responsibleMemberId,
+          responsibleName: linkedExpense.responsibleName
+        }
+      : await resolveResponsibleMember(tx, budgetId, data);
+    const currency = await resolveCurrency(tx, budgetId, {
+      currencyId: data.currencyId || linkedExpense?.currencyId || undefined,
+      exchangeRateToDop: data.exchangeRateToDop || Number(linkedExpense?.exchangeRateToDop ?? 1)
+    });
+    const amountDop = convertToDop(data.amount, currency.exchangeRateToDop);
+
     const payment = await tx.expensePayment.update({
       where: {
         id: existing.id
@@ -1394,10 +1914,17 @@ export async function updateExpensePaymentAction(budgetId: string, paymentId: st
       data: {
         expenseId: linkedExpense?.id ?? null,
         name: linkedExpense?.name ?? data.name,
-        responsibleName: linkedExpense?.responsibleName ?? data.responsibleName,
+        responsibleName: responsible.responsibleName,
+        responsibleMemberId: responsible.responsibleMemberId,
         categoryId: linkedExpense?.categoryId ?? data.categoryId,
         bankAccountId: (linkedExpense?.bankAccountId ?? data.bankAccountId) || null,
-        amount: data.amount,
+        currencyId: currency.currencyId,
+        currencyCode: currency.currencyCode,
+        currencySymbol: currency.currencySymbol,
+        amountOriginal: data.amount,
+        exchangeRateToDop: currency.exchangeRateToDop,
+        amountDop,
+        amount: amountDop,
         paidDate,
         notes: data.notes
       }
@@ -1419,13 +1946,17 @@ export async function updateExpensePaymentAction(budgetId: string, paymentId: st
       oldValue: {
         expenseId: existing.expenseId,
         name: existing.name,
+        amountOriginal: Number(existing.amountOriginal),
         amount: Number(existing.amount),
+        currencyCode: existing.currencyCode,
         paidDate: existing.paidDate.toISOString()
       },
       newValue: {
         expenseId: payment.expenseId,
         name: payment.name,
+        amountOriginal: Number(payment.amountOriginal),
         amount: Number(payment.amount),
+        currencyCode: payment.currencyCode,
         paidDate: payment.paidDate.toISOString()
       }
     });
@@ -1482,23 +2013,44 @@ export async function deleteExpensePaymentAction(budgetId: string, paymentId: st
 export async function createDebtAction(budgetId: string, periodTarget: PeriodTarget, raw: unknown) {
   const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER, WorkspaceRole.EDITOR]);
   const data = debtSchema.parse(raw);
-  const estimatedTotalInterest = calculateDebtInterest(
-    data.pendingBalance,
-    data.annualInterestRate,
-    data.remainingMonths
-  );
 
   await prisma.$transaction(async (tx) => {
     const period = await getOrCreateBudgetPeriodWithInheritance(tx, budgetId, periodTarget, access.user.id);
+    const responsible = await resolveResponsibleMember(tx, budgetId, data);
+    const currency = await resolveCurrency(tx, budgetId, data);
+    const pendingBalanceDop = convertToDop(data.pendingBalance, currency.exchangeRateToDop);
+    const monthlyPaymentDop = convertToDop(data.monthlyPayment, currency.exchangeRateToDop);
+    const estimatedTotalInterest = calculateDebtInterest(
+      pendingBalanceDop,
+      data.annualInterestRate,
+      data.remainingMonths
+    );
     const estimatedCloseDate = periodStartDate(period);
     estimatedCloseDate.setUTCMonth(estimatedCloseDate.getUTCMonth() + data.remainingMonths);
     const debt = await tx.debt.create({
       data: {
-        ...data,
+        name: data.name,
+        entity: data.entity,
+        responsibleName: responsible.responsibleName,
+        responsibleMemberId: responsible.responsibleMemberId,
+        currencyId: currency.currencyId,
+        currencyCode: currency.currencyCode,
+        currencySymbol: currency.currencySymbol,
+        pendingBalanceOriginal: data.pendingBalance,
+        monthlyPaymentOriginal: data.monthlyPayment,
+        exchangeRateToDop: currency.exchangeRateToDop,
+        pendingBalanceDop,
+        monthlyPaymentDop,
+        pendingBalance: pendingBalanceDop,
+        monthlyPayment: monthlyPaymentDop,
+        annualInterestRate: data.annualInterestRate,
+        remainingMonths: data.remainingMonths,
         estimatedTotalInterest,
+        strategy: data.strategy,
         estimatedCloseDate,
         startDate: periodStartDate(period),
         status: "ACTIVE",
+        notes: data.notes,
         budgetPeriodId: period.id,
         createdById: access.user.id,
         updatedById: access.user.id
@@ -1514,7 +2066,9 @@ export async function createDebtAction(budgetId: string, periodTarget: PeriodTar
       newValue: {
         name: debt.name,
         entity: debt.entity,
-        pendingBalance: Number(data.pendingBalance)
+        pendingBalanceOriginal: Number(data.pendingBalance),
+        pendingBalance: pendingBalanceDop,
+        currencyCode: debt.currencyCode
       }
     });
   });
@@ -1525,11 +2079,6 @@ export async function createDebtAction(budgetId: string, periodTarget: PeriodTar
 export async function updateDebtAction(budgetId: string, debtId: string, raw: unknown) {
   const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER, WorkspaceRole.EDITOR]);
   const data = debtSchema.parse(raw);
-  const estimatedTotalInterest = calculateDebtInterest(
-    data.pendingBalance,
-    data.annualInterestRate,
-    data.remainingMonths
-  );
 
   await prisma.$transaction(async (tx) => {
     const existing = await tx.debt.findFirst({
@@ -1548,6 +2097,15 @@ export async function updateDebtAction(budgetId: string, debtId: string, raw: un
       throw new Error("No se encontró la deuda en este presupuesto.");
     }
 
+    const responsible = await resolveResponsibleMember(tx, budgetId, data);
+    const currency = await resolveCurrency(tx, budgetId, data);
+    const pendingBalanceDop = convertToDop(data.pendingBalance, currency.exchangeRateToDop);
+    const monthlyPaymentDop = convertToDop(data.monthlyPayment, currency.exchangeRateToDop);
+    const estimatedTotalInterest = calculateDebtInterest(
+      pendingBalanceDop,
+      data.annualInterestRate,
+      data.remainingMonths
+    );
     const estimatedCloseDate = periodStartDate(existing.budgetPeriod);
     estimatedCloseDate.setUTCMonth(estimatedCloseDate.getUTCMonth() + data.remainingMonths);
     const debt = await tx.debt.update({
@@ -1555,9 +2113,26 @@ export async function updateDebtAction(budgetId: string, debtId: string, raw: un
         id: existing.id
       },
       data: {
-        ...data,
+        name: data.name,
+        entity: data.entity,
+        responsibleName: responsible.responsibleName,
+        responsibleMemberId: responsible.responsibleMemberId,
+        currencyId: currency.currencyId,
+        currencyCode: currency.currencyCode,
+        currencySymbol: currency.currencySymbol,
+        pendingBalanceOriginal: data.pendingBalance,
+        monthlyPaymentOriginal: data.monthlyPayment,
+        exchangeRateToDop: currency.exchangeRateToDop,
+        pendingBalanceDop,
+        monthlyPaymentDop,
+        pendingBalance: pendingBalanceDop,
+        monthlyPayment: monthlyPaymentDop,
+        annualInterestRate: data.annualInterestRate,
+        remainingMonths: data.remainingMonths,
         estimatedTotalInterest,
         estimatedCloseDate,
+        strategy: data.strategy,
+        notes: data.notes,
         updatedById: access.user.id
       }
     });
@@ -1571,12 +2146,16 @@ export async function updateDebtAction(budgetId: string, debtId: string, raw: un
       oldValue: {
         name: existing.name,
         pendingBalance: Number(existing.pendingBalance),
+        pendingBalanceOriginal: Number(existing.pendingBalanceOriginal),
+        currencyCode: existing.currencyCode,
         monthlyPayment: Number(existing.monthlyPayment),
         status: existing.status
       },
       newValue: {
         name: debt.name,
         pendingBalance: Number(debt.pendingBalance),
+        pendingBalanceOriginal: Number(debt.pendingBalanceOriginal),
+        currencyCode: debt.currencyCode,
         monthlyPayment: Number(debt.monthlyPayment),
         status: debt.status
       }
@@ -1668,6 +2247,59 @@ export async function markDebtPaidAction(budgetId: string, debtId: string) {
     });
   });
 
+  revalidatePath(`/app/budgets/${budgetId}`);
+  revalidatePath(`/app/budgets/${budgetId}/dashboard`);
+  revalidatePath(`/app/budgets/${budgetId}/debts`);
+}
+
+export async function reopenDebtAction(budgetId: string, debtId: string) {
+  const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER, WorkspaceRole.EDITOR]);
+
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.debt.findFirst({
+      where: {
+        id: debtId,
+        budgetPeriod: {
+          budgetId
+        }
+      }
+    });
+
+    if (!existing) {
+      throw new Error("No se encontro la deuda en este presupuesto.");
+    }
+
+    if (existing.status !== "PAID") {
+      throw new Error("Solo puedes reabrir una deuda marcada como pagada.");
+    }
+
+    const debt = await tx.debt.update({
+      where: {
+        id: existing.id
+      },
+      data: {
+        status: "ACTIVE",
+        updatedById: access.user.id
+      }
+    });
+
+    await audit(tx, {
+      workspaceId: access.budget.workspaceId,
+      userId: access.user.id,
+      entityType: "Debt",
+      entityId: debt.id,
+      action: "REOPEN_DEBT",
+      oldValue: {
+        status: existing.status
+      },
+      newValue: {
+        status: debt.status
+      }
+    });
+  });
+
+  revalidatePath(`/app/budgets/${budgetId}`);
+  revalidatePath(`/app/budgets/${budgetId}/dashboard`);
   revalidatePath(`/app/budgets/${budgetId}/debts`);
 }
 
@@ -2033,121 +2665,7 @@ export async function copyNextPeriodAction(budgetId: string) {
     const nextMonthDate = new Date(Date.UTC(current.year, current.month, 1));
     const year = nextMonthDate.getUTCFullYear();
     const month = nextMonthDate.getUTCMonth() + 1;
-
-    const existing = await tx.budgetPeriod.findUnique({
-      where: {
-        budgetId_year_month: {
-          budgetId,
-          year,
-          month
-        }
-      }
-    });
-
-    if (existing) {
-      return;
-    }
-
-    const nextPeriod = await tx.budgetPeriod.create({
-      data: {
-        budgetId,
-        year,
-        month,
-        status: "DRAFT"
-      }
-    });
-
-    await tx.income.createMany({
-      data: current.incomes.map((income) => {
-        const fortnight = expectedIncomeByFortnight(income, year, month);
-        return {
-          budgetPeriodId: nextPeriod.id,
-          responsibleName: income.responsibleName,
-          amount: income.amount,
-          amountType: income.amountType,
-          frequency: income.frequency,
-          startDate: income.startDate,
-          endDate: income.endDate,
-          customRule: income.customRule,
-          expectedPaymentDays: income.expectedPaymentDays,
-          amountMonthly: estimateMonthlyIncome(income),
-          amountQ1: fortnight.q1,
-          amountQ2: fortnight.q2,
-          source: income.source,
-          notes: income.notes,
-          isActive: income.isActive,
-          createdById: access.user.id,
-          updatedById: access.user.id
-        };
-      })
-    });
-
-    await tx.expense.createMany({
-      data: current.expenses.map((expense) => ({
-        budgetPeriodId: nextPeriod.id,
-        name: expense.name,
-        responsibleName: expense.responsibleName,
-        categoryId: expense.categoryId,
-        amountBudgetedMonthly: expense.amountBudgetedMonthly,
-        amountQ1: expense.amountQ1,
-        amountQ2: expense.amountQ2,
-        bankAccountId: expense.bankAccountId,
-        actualAmount: 0,
-        difference: -Number(expense.amountBudgetedMonthly),
-        status: "PENDING",
-        expenseDate: null,
-        isRecurring: expense.isRecurring,
-        isActive: expense.isActive,
-        notes: expense.notes,
-        createdById: access.user.id,
-        updatedById: access.user.id
-      }))
-    });
-
-    await tx.debt.createMany({
-      data: current.debts.map((debt) => {
-        const shouldApplyMonthlyPayment = debt.status === "ACTIVE";
-        const nextRemainingMonths = shouldApplyMonthlyPayment ? Math.max(debt.remainingMonths - 1, 0) : debt.remainingMonths;
-        const nextPendingBalance = shouldApplyMonthlyPayment
-          ? Math.max(Number(debt.pendingBalance) - Number(debt.monthlyPayment), 0)
-          : debt.pendingBalance;
-        const nextStatus = shouldApplyMonthlyPayment && Number(nextPendingBalance) <= 0 ? "PAID" : debt.status;
-
-        return {
-          budgetPeriodId: nextPeriod.id,
-          name: debt.name,
-          entity: debt.entity,
-          responsibleName: debt.responsibleName,
-          pendingBalance: nextPendingBalance,
-          monthlyPayment: debt.monthlyPayment,
-          annualInterestRate: debt.annualInterestRate,
-          remainingMonths: nextRemainingMonths,
-          estimatedTotalInterest: calculateDebtInterest(nextPendingBalance, debt.annualInterestRate, nextRemainingMonths),
-          strategy: debt.strategy,
-          startDate: debt.startDate,
-          estimatedCloseDate: debt.estimatedCloseDate,
-          status: nextStatus,
-          notes: debt.notes,
-          createdById: access.user.id,
-          updatedById: access.user.id
-        };
-      })
-    });
-
-    await tx.savingGoal.createMany({
-      data: current.savingGoals.map((goal) => ({
-        budgetPeriodId: nextPeriod.id,
-        name: goal.name,
-        monthlyTarget: goal.monthlyTarget,
-        contributedThisMonth: 0,
-        accumulatedBalance: goal.accumulatedBalance,
-        institution: goal.institution,
-        priority: goal.priority,
-        notes: goal.notes,
-        createdById: access.user.id,
-        updatedById: access.user.id
-      }))
-    });
+    const nextPeriod = await getOrCreateBudgetPeriodWithInheritance(tx, budgetId, { year, month }, access.user.id);
 
     await audit(tx, {
       workspaceId: access.budget.workspaceId,
@@ -2163,5 +2681,7 @@ export async function copyNextPeriodAction(budgetId: string) {
     });
   });
 
+  revalidatePath(`/app/budgets/${budgetId}`);
+  revalidatePath(`/app/budgets/${budgetId}/dashboard`);
   revalidatePath(`/app/budgets/${budgetId}/history`);
 }

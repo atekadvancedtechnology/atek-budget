@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 
 import { BankAccountManager } from "@/components/bank-account-manager";
 import { BudgetDeleteButton } from "@/components/budget-delete-button";
+import { CurrencyManager } from "@/components/currency-manager";
 import { ExpenseCategoryManager } from "@/components/expense-category-manager";
 import { InviteMemberForm } from "@/components/forms";
 import { InvitationLinkActions } from "@/components/invitation-link-actions";
@@ -50,6 +51,20 @@ export default async function SettingsPage({ params }: PageProps) {
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
+        <CurrencyManager
+          budgetId={budgetId}
+          canEdit={access.canEdit}
+          currencies={budget.currencies.map((currency) => ({
+            id: currency.id,
+            code: currency.code,
+            name: currency.name,
+            symbol: currency.symbol,
+            defaultRateToDop: Number(currency.defaultRateToDop),
+            isBase: currency.isBase,
+            isActive: currency.isActive
+          }))}
+        />
+
         <ExpenseCategoryManager
           budgetId={budgetId}
           canEdit={access.canEdit}

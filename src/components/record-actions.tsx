@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, Pencil, Trash2 } from "lucide-react";
+import { CheckCircle2, Pencil, RotateCcw, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useTransition } from "react";
@@ -14,7 +14,8 @@ import {
   deleteIncomeAction,
   deleteIncomeReceiptAction,
   deleteSavingGoalAction,
-  markDebtPaidAction
+  markDebtPaidAction,
+  reopenDebtAction
 } from "@/lib/actions";
 
 type RecordEntity = "income" | "incomeReceipt" | "expense" | "expensePayment" | "debt" | "savingGoal";
@@ -40,16 +41,20 @@ const entityLabels: Record<RecordEntity, string> = {
 export function RecordActions({
   budgetId,
   canMarkPaid,
+  canReopenDebt,
   editHref,
   entity,
   isPaidDisabled,
+  isReopenDisabled,
   recordId
 }: {
   budgetId: string;
   canMarkPaid?: boolean;
+  canReopenDebt?: boolean;
   editHref: string;
   entity: RecordEntity;
   isPaidDisabled?: boolean;
+  isReopenDisabled?: boolean;
   recordId: string;
 }) {
   const router = useRouter();
@@ -86,6 +91,20 @@ export function RecordActions({
           onClick={() => runAction(() => markDebtPaidAction(budgetId, recordId))}
         >
           <CheckCircle2 aria-hidden="true" className="h-4 w-4" />
+        </Button>
+      ) : null}
+      {canReopenDebt ? (
+        <Button
+          aria-label="Reabrir deuda"
+          className="h-8 w-8"
+          disabled={isPending || isReopenDisabled}
+          size="icon"
+          title="Reabrir deuda"
+          type="button"
+          variant="ghost"
+          onClick={() => runAction(() => reopenDebtAction(budgetId, recordId))}
+        >
+          <RotateCcw aria-hidden="true" className="h-4 w-4" />
         </Button>
       ) : null}
       <ConfirmButton

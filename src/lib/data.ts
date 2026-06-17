@@ -79,12 +79,36 @@ export async function getBudgetWorkspaceData(budgetId: string) {
           name: "asc"
         }
       },
+      currencies: {
+        orderBy: [
+          {
+            isBase: "desc"
+          },
+          {
+            code: "asc"
+          }
+        ]
+      },
       periods: {
         orderBy: [{ year: "desc" }, { month: "desc" }],
         include: {
           incomes: {
             include: {
+              responsibleMember: {
+                include: {
+                  user: true
+                }
+              },
+              currency: true,
               receipts: {
+                include: {
+                  responsibleMember: {
+                    include: {
+                      user: true
+                    }
+                  },
+                  currency: true
+                },
                 orderBy: {
                   receivedDate: "desc"
                 }
@@ -96,7 +120,22 @@ export async function getBudgetWorkspaceData(budgetId: string) {
           },
           incomeReceipts: {
             include: {
-              income: true
+              income: {
+                include: {
+                  responsibleMember: {
+                    include: {
+                      user: true
+                    }
+                  },
+                  currency: true
+                }
+              },
+              responsibleMember: {
+                include: {
+                  user: true
+                }
+              },
+              currency: true
             },
             orderBy: {
               receivedDate: "desc"
@@ -104,9 +143,23 @@ export async function getBudgetWorkspaceData(budgetId: string) {
           },
           expenses: {
             include: {
+              responsibleMember: {
+                include: {
+                  user: true
+                }
+              },
               category: true,
+              currency: true,
               bankAccount: true,
               payments: {
+                include: {
+                  responsibleMember: {
+                    include: {
+                      user: true
+                    }
+                  },
+                  currency: true
+                },
                 orderBy: {
                   paidDate: "desc"
                 }
@@ -119,7 +172,13 @@ export async function getBudgetWorkspaceData(budgetId: string) {
           expensePayments: {
             include: {
               expense: true,
+              responsibleMember: {
+                include: {
+                  user: true
+                }
+              },
               category: true,
+              currency: true,
               bankAccount: true
             },
             orderBy: {
@@ -127,6 +186,14 @@ export async function getBudgetWorkspaceData(budgetId: string) {
             }
           },
           debts: {
+            include: {
+              responsibleMember: {
+                include: {
+                  user: true
+                }
+              },
+              currency: true
+            },
             orderBy: {
               pendingBalance: "desc"
             }

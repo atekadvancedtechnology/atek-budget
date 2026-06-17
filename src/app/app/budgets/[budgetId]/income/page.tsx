@@ -63,19 +63,43 @@ function formatDateInput(value: Date | string | null | undefined) {
   return new Date(value).toISOString().slice(0, 10);
 }
 
+function responsibleLabel(record: {
+  responsibleName: string;
+  responsibleMember?: {
+    user: {
+      name: string | null;
+      email: string | null;
+    };
+  } | null;
+}) {
+  return record.responsibleMember?.user.name || record.responsibleMember?.user.email || record.responsibleName;
+}
+
 export default async function IncomePage({ params, searchParams }: PageProps) {
   const { budgetId } = await params;
   const query = await searchParams;
   const access = await requireBudgetAccess(budgetId);
   const periodData = await getBudgetWorkspaceDataForPeriod(budgetId, query, access.user.id);
   if (!periodData) notFound();
-  const { selection, selectedPeriod } = periodData;
+  const { budget, selection, selectedPeriod } = periodData;
   const basePath = `/app/budgets/${budgetId}/income`;
   const summary = buildBudgetSummary(selectedPeriod ?? emptyPeriodInput(selection.year, selection.month));
   const returnPath = periodHref(basePath, selection.year, selection.month);
   const editIncome = selectedPeriod?.incomes.find((income) => income.id === query?.editIncome);
   const editReceipt = selectedPeriod?.incomeReceipts.find((receipt) => receipt.id === query?.editReceipt);
   const editReceiptIncome = editReceipt?.income;
+  const memberOptions = budget.workspace.members.map((member) => ({
+    id: member.id,
+    name: member.user.name || member.user.email || "Miembro"
+  }));
+  const currencyOptions = budget.currencies.filter((currency) => currency.isActive).map((currency) => ({
+    id: currency.id,
+    code: currency.code,
+    name: currency.name,
+    symbol: currency.symbol,
+    defaultRateToDop: Number(currency.defaultRateToDop),
+    isBase: currency.isBase
+  }));
 
   return (
     <div className="space-y-6">
@@ -109,13 +133,17 @@ export default async function IncomePage({ params, searchParams }: PageProps) {
       <IncomeForm
         key={`${editIncome?.id ?? "new-income"}-${selection.year}-${selection.month}`}
         budgetId={budgetId}
+        currencies={currencyOptions}
         disabled={!access.canEdit}
         initialValues={
           editIncome
             ? {
+                responsibleMemberId: editIncome.responsibleMemberId ?? "",
                 responsibleName: editIncome.responsibleName,
+                currencyId: editIncome.currencyId ?? "",
+                exchangeRateToDop: Number(editIncome.exchangeRateToDop),
                 source: editIncome.source,
-                amount: Number(editIncome.amount),
+                amount: Number(editIncome.amountOriginal),
                 amountType: editIncome.amountType,
                 frequency: editIncome.frequency,
                 startDate: formatDateInput(editIncome.startDate),
@@ -127,6 +155,7 @@ export default async function IncomePage({ params, searchParams }: PageProps) {
               }
             : undefined
         }
+        members={memberOptions}
         periodMonth={selection.month}
         periodYear={selection.year}
         recordId={editIncome?.id}
@@ -135,14 +164,18 @@ export default async function IncomePage({ params, searchParams }: PageProps) {
       <IncomeReceiptForm
         key={`${editReceipt?.id ?? "new-receipt"}-${selection.year}-${selection.month}`}
         budgetId={budgetId}
+        currencies={currencyOptions}
         disabled={!access.canEdit}
         initialValues={
           editReceipt
             ? {
                 incomeId: editReceipt.incomeId ?? "",
+                responsibleMemberId: editReceiptIncome?.responsibleMemberId ?? editReceipt.responsibleMemberId ?? "",
                 responsibleName: editReceiptIncome?.responsibleName ?? editReceipt.responsibleName,
+                currencyId: editReceipt.currencyId ?? editReceiptIncome?.currencyId ?? "",
+                exchangeRateToDop: Number(editReceipt.exchangeRateToDop),
                 source: editReceiptIncome?.source ?? editReceipt.source,
-                amount: Number(editReceipt.amount),
+                amount: Number(editReceipt.amountOriginal),
                 receivedDate: formatDateInput(editReceipt.receivedDate),
                 notes: editReceipt.notes ?? ""
               }
@@ -150,9 +183,13 @@ export default async function IncomePage({ params, searchParams }: PageProps) {
         }
         incomes={selectedPeriod?.incomes.map((income) => ({
           id: income.id,
+          responsibleMemberId: income.responsibleMemberId,
           responsibleName: income.responsibleName,
-          source: income.source
+          source: income.source,
+          currencyId: income.currencyId,
+          exchangeRateToDop: Number(income.exchangeRateToDop)
         })) ?? []}
+        members={memberOptions}
         periodMonth={selection.month}
         periodYear={selection.year}
         recordId={editReceipt?.id}
@@ -165,7 +202,8 @@ export default async function IncomePage({ params, searchParams }: PageProps) {
             <TableRow>
               <TableHead>Responsable</TableHead>
               <TableHead>Fuente</TableHead>
-              <TableHead>Monto</TableHead>
+              <TableHead>Monto DOP</TableHead>
+              <TableHead>Original</TableHead>
               <TableHead>Tipo</TableHead>
               <TableHead>Frecuencia</TableHead>
               <TableHead>Inicio</TableHead>
@@ -187,9 +225,10 @@ export default async function IncomePage({ params, searchParams }: PageProps) {
               const received = receivedIncomeForIncome(income);
               return (
                 <TableRow key={income.id}>
-                  <TableCell className="font-medium" data-label="Responsable">{income.responsibleName}</TableCell>
+                  <TableCell className="font-medium" data-label="Responsable">{responsibleLabel(income)}</TableCell>
                   <TableCell data-label="Fuente">{income.source}</TableCell>
-                  <TableCell data-label="Monto">{formatCurrency(income.amount)}</TableCell>
+                  <TableCell data-label="Monto DOP">{formatCurrency(income.amount)}</TableCell>
+                  <TableCell data-label="Original">{formatCurrency(income.amountOriginal, income.currencySymbol)} {income.currencyCode}</TableCell>
                   <TableCell data-label="Tipo">{amountTypeLabels[income.amountType]}</TableCell>
                   <TableCell data-label="Frecuencia">{frequencyLabels[income.frequency]}</TableCell>
                   <TableCell data-label="Inicio">{formatDate(income.startDate)}</TableCell>
@@ -227,14 +266,15 @@ export default async function IncomePage({ params, searchParams }: PageProps) {
               <TableHead>Fecha recibida</TableHead>
               <TableHead>Responsable</TableHead>
               <TableHead>Fuente</TableHead>
-              <TableHead>Monto recibido</TableHead>
+              <TableHead>Monto DOP</TableHead>
+              <TableHead>Original</TableHead>
               <TableHead>Notas</TableHead>
               <TableHead />
             </TableRow>
           </TableHeader>
           <TableBody>
             {selectedPeriod?.incomeReceipts.map((receipt) => {
-              const responsibleName = receipt.income?.responsibleName ?? receipt.responsibleName;
+              const responsibleName = receipt.income ? responsibleLabel(receipt.income) : responsibleLabel(receipt);
               const source = receipt.income?.source ?? receipt.source;
 
               return (
@@ -242,7 +282,8 @@ export default async function IncomePage({ params, searchParams }: PageProps) {
                   <TableCell data-label="Fecha recibida">{formatDate(receipt.receivedDate)}</TableCell>
                   <TableCell className="font-medium" data-label="Responsable">{responsibleName}</TableCell>
                   <TableCell data-label="Fuente">{source}</TableCell>
-                  <TableCell data-label="Monto recibido">{formatCurrency(receipt.amount)}</TableCell>
+                  <TableCell data-label="Monto DOP">{formatCurrency(receipt.amount)}</TableCell>
+                  <TableCell data-label="Original">{formatCurrency(receipt.amountOriginal, receipt.currencySymbol)} {receipt.currencyCode}</TableCell>
                   <TableCell data-label="Notas">{receipt.notes ?? ""}</TableCell>
                   <TableCell className="text-right" data-label="">
                     {access.canEdit ? (

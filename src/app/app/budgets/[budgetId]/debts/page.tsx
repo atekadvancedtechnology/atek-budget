@@ -26,17 +26,41 @@ const strategyLabels: Record<string, string> = {
   CUSTOM: "Personalizada"
 };
 
+function responsibleLabel(record: {
+  responsibleName: string;
+  responsibleMember?: {
+    user: {
+      name: string | null;
+      email: string | null;
+    };
+  } | null;
+}) {
+  return record.responsibleMember?.user.name || record.responsibleMember?.user.email || record.responsibleName;
+}
+
 export default async function DebtsPage({ params, searchParams }: PageProps) {
   const { budgetId } = await params;
   const query = await searchParams;
   const access = await requireBudgetAccess(budgetId);
   const periodData = await getBudgetWorkspaceDataForPeriod(budgetId, query, access.user.id);
   if (!periodData) notFound();
-  const { selection, selectedPeriod } = periodData;
+  const { budget, selection, selectedPeriod } = periodData;
   const basePath = `/app/budgets/${budgetId}/debts`;
   const summary = buildBudgetSummary(selectedPeriod ?? emptyPeriodInput(selection.year, selection.month));
   const returnPath = periodHref(basePath, selection.year, selection.month);
   const editDebt = selectedPeriod?.debts.find((debt) => debt.id === query?.editDebt);
+  const memberOptions = budget.workspace.members.map((member) => ({
+    id: member.id,
+    name: member.user.name || member.user.email || "Miembro"
+  }));
+  const currencyOptions = budget.currencies.filter((currency) => currency.isActive).map((currency) => ({
+    id: currency.id,
+    code: currency.code,
+    name: currency.name,
+    symbol: currency.symbol,
+    defaultRateToDop: Number(currency.defaultRateToDop),
+    isBase: currency.isBase
+  }));
 
   return (
     <div className="space-y-6">
@@ -69,15 +93,19 @@ export default async function DebtsPage({ params, searchParams }: PageProps) {
       <DebtForm
         key={`${editDebt?.id ?? "new-debt"}-${selection.year}-${selection.month}`}
         budgetId={budgetId}
+        currencies={currencyOptions}
         disabled={!access.canEdit}
         initialValues={
           editDebt
             ? {
                 name: editDebt.name,
                 entity: editDebt.entity,
+                responsibleMemberId: editDebt.responsibleMemberId ?? "",
                 responsibleName: editDebt.responsibleName,
-                pendingBalance: Number(editDebt.pendingBalance),
-                monthlyPayment: Number(editDebt.monthlyPayment),
+                currencyId: editDebt.currencyId ?? "",
+                exchangeRateToDop: Number(editDebt.exchangeRateToDop),
+                pendingBalance: Number(editDebt.pendingBalanceOriginal),
+                monthlyPayment: Number(editDebt.monthlyPaymentOriginal),
                 annualInterestRate: Number(editDebt.annualInterestRate),
                 remainingMonths: editDebt.remainingMonths,
                 strategy: editDebt.strategy,
@@ -85,6 +113,7 @@ export default async function DebtsPage({ params, searchParams }: PageProps) {
               }
             : undefined
         }
+        members={memberOptions}
         periodMonth={selection.month}
         periodYear={selection.year}
         recordId={editDebt?.id}
@@ -98,8 +127,9 @@ export default async function DebtsPage({ params, searchParams }: PageProps) {
               <TableHead>Deuda</TableHead>
               <TableHead>Entidad</TableHead>
               <TableHead>Responsable</TableHead>
-              <TableHead>Saldo</TableHead>
-              <TableHead>Cuota</TableHead>
+              <TableHead>Saldo DOP</TableHead>
+              <TableHead>Cuota DOP</TableHead>
+              <TableHead>Original</TableHead>
               <TableHead>Interés est.</TableHead>
               <TableHead>Estrategia</TableHead>
               <TableHead>Estado</TableHead>
@@ -111,9 +141,10 @@ export default async function DebtsPage({ params, searchParams }: PageProps) {
               <TableRow key={debt.id}>
                 <TableCell className="font-medium" data-label="Deuda">{debt.name}</TableCell>
                 <TableCell data-label="Entidad">{debt.entity}</TableCell>
-                <TableCell data-label="Responsable">{debt.responsibleName}</TableCell>
-                <TableCell data-label="Saldo">{formatCurrency(debt.pendingBalance)}</TableCell>
-                <TableCell data-label="Cuota">{formatCurrency(debt.monthlyPayment)}</TableCell>
+                <TableCell data-label="Responsable">{responsibleLabel(debt)}</TableCell>
+                <TableCell data-label="Saldo DOP">{formatCurrency(debt.pendingBalance)}</TableCell>
+                <TableCell data-label="Cuota DOP">{formatCurrency(debt.monthlyPayment)}</TableCell>
+                <TableCell data-label="Original">{formatCurrency(debt.pendingBalanceOriginal, debt.currencySymbol)} {debt.currencyCode}</TableCell>
                 <TableCell data-label="Interés est.">{formatCurrency(debt.estimatedTotalInterest)}</TableCell>
                 <TableCell data-label="Estrategia">{strategyLabels[debt.strategy]}</TableCell>
                 <TableCell data-label="Estado">
@@ -124,9 +155,11 @@ export default async function DebtsPage({ params, searchParams }: PageProps) {
                     <RecordActions
                       budgetId={budgetId}
                       canMarkPaid
+                      canReopenDebt
                       editHref={periodHref(basePath, selection.year, selection.month, { editDebt: debt.id })}
                       entity="debt"
                       isPaidDisabled={debt.status !== "ACTIVE"}
+                      isReopenDisabled={debt.status !== "PAID"}
                       recordId={debt.id}
                     />
                   ) : null}

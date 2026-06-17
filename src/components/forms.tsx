@@ -127,6 +127,28 @@ type ExpensePaymentFormValues = z.infer<typeof expensePaymentSchema>;
 type DebtFormValues = z.infer<typeof debtSchema>;
 type SavingGoalFormValues = z.infer<typeof savingGoalSchema>;
 
+type MemberOption = {
+  id: string;
+  name: string;
+};
+
+type CurrencyOption = {
+  id: string;
+  code: string;
+  name: string;
+  symbol: string;
+  defaultRateToDop: number;
+  isBase: boolean;
+};
+
+function defaultMember(members: MemberOption[]) {
+  return members[0] ?? { id: "", name: "" };
+}
+
+function defaultCurrency(currencies: CurrencyOption[]) {
+  return currencies.find((currency) => currency.isBase) ?? currencies[0] ?? null;
+}
+
 function todayInputValue() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -202,16 +224,20 @@ export function CreateBudgetForm() {
 
 export function IncomeForm({
   budgetId,
+  currencies,
   disabled,
   initialValues,
+  members,
   periodMonth,
   periodYear,
   recordId,
   returnPath
 }: {
   budgetId: string;
+  currencies: CurrencyOption[];
   disabled: boolean;
   initialValues?: IncomeFormValues;
+  members: MemberOption[];
   periodMonth: number;
   periodYear: number;
   recordId?: string;
@@ -223,10 +249,15 @@ export function IncomeForm({
   const [success, setSuccess] = useState<string>();
   const [formVersion, setFormVersion] = useState(0);
   const isEditing = Boolean(recordId);
+  const initialMember = defaultMember(members);
+  const initialCurrency = defaultCurrency(currencies);
   const form = useForm<IncomeFormValues>({
     resolver: zodResolver(incomeSchema),
     defaultValues: initialValues ?? {
-      responsibleName: "",
+      responsibleMemberId: initialMember.id,
+      responsibleName: initialMember.name,
+      currencyId: initialCurrency?.id ?? "",
+      exchangeRateToDop: initialCurrency?.isBase ? 1 : initialCurrency?.defaultRateToDop ?? 1,
       source: "",
       amount: 0,
       amountType: "FIXED",
@@ -270,9 +301,10 @@ export function IncomeForm({
           });
         })}
       >
-        <TextInput label="Responsable" name="responsibleName" form={form} disabled={disabled} />
+        <MemberField form={form} members={members} disabled={disabled} />
         <TextInput label="Fuente" name="source" form={form} disabled={disabled} />
         <MoneyInput label="Monto" name="amount" form={form} disabled={disabled} />
+        <CurrencyFields form={form} currencies={currencies} disabled={disabled} />
         <SelectField label="Tipo de monto" name="amountType" form={form} disabled={disabled} options={amountTypeOptions} />
         <SelectField label="Frecuencia" name="frequency" form={form} disabled={disabled} options={frequencyOptions} />
         <TextInput label="Fecha de inicio" name="startDate" form={form} disabled={disabled} type="date" />
@@ -305,18 +337,29 @@ export function IncomeForm({
 
 export function IncomeReceiptForm({
   budgetId,
+  currencies,
   disabled,
   incomes,
   initialValues,
+  members,
   periodMonth,
   periodYear,
   recordId,
   returnPath
 }: {
   budgetId: string;
+  currencies: CurrencyOption[];
   disabled: boolean;
-  incomes: { id: string; responsibleName: string; source: string }[];
+  incomes: {
+    id: string;
+    responsibleName: string;
+    responsibleMemberId?: string | null;
+    source: string;
+    currencyId?: string | null;
+    exchangeRateToDop?: number;
+  }[];
   initialValues?: IncomeReceiptFormValues;
+  members: MemberOption[];
   periodMonth: number;
   periodYear: number;
   recordId?: string;
@@ -329,11 +372,16 @@ export function IncomeReceiptForm({
   const [formVersion, setFormVersion] = useState(0);
   const isEditing = Boolean(recordId);
   const [selectedIncomeId, setSelectedIncomeId] = useState(initialValues?.incomeId ?? "");
+  const initialMember = defaultMember(members);
+  const initialCurrency = defaultCurrency(currencies);
   const form = useForm<IncomeReceiptFormValues>({
     resolver: zodResolver(incomeReceiptSchema),
     defaultValues: initialValues ?? {
       incomeId: "",
-      responsibleName: "",
+      responsibleMemberId: initialMember.id,
+      responsibleName: initialMember.name,
+      currencyId: initialCurrency?.id ?? "",
+      exchangeRateToDop: initialCurrency?.isBase ? 1 : initialCurrency?.defaultRateToDop ?? 1,
       source: "",
       amount: 0,
       receivedDate: defaultDateForPeriod(periodYear, periodMonth),
@@ -380,11 +428,24 @@ export function IncomeReceiptForm({
               form.setValue("incomeId", value, { shouldDirty: true, shouldValidate: true });
               const selectedIncome = incomes.find((income) => income.id === value);
               if (selectedIncome) {
+                form.setValue("responsibleMemberId", selectedIncome.responsibleMemberId ?? "", {
+                  shouldDirty: true,
+                  shouldValidate: true
+                });
                 form.setValue("responsibleName", selectedIncome.responsibleName, {
                   shouldDirty: true,
                   shouldValidate: true
                 });
                 form.setValue("source", selectedIncome.source, { shouldDirty: true, shouldValidate: true });
+                form.setValue("currencyId", selectedIncome.currencyId ?? initialCurrency?.id ?? "", {
+                  shouldDirty: true,
+                  shouldValidate: true
+                });
+                form.setValue(
+                  "exchangeRateToDop",
+                  selectedIncome.exchangeRateToDop ?? initialCurrency?.defaultRateToDop ?? 1,
+                  { shouldDirty: true, shouldValidate: true }
+                );
               }
             }}
           >
@@ -397,9 +458,10 @@ export function IncomeReceiptForm({
           </Select>
           <FieldError message={form.formState.errors.incomeId?.message?.toString()} />
         </div>
-        <TextInput label="Responsable" name="responsibleName" form={form} disabled={disabled} />
+        <MemberField form={form} members={members} disabled={disabled || Boolean(selectedIncomeId)} />
         <TextInput label="Fuente" name="source" form={form} disabled={disabled} />
         <MoneyInput label="Monto recibido" name="amount" form={form} disabled={disabled} />
+        <CurrencyFields form={form} currencies={currencies} disabled={disabled} />
         <TextInput label="Fecha recibida" name="receivedDate" form={form} disabled={disabled} type="date" />
         <TextInput label="Notas" name="notes" form={form} disabled={disabled} />
         <FormFooter
@@ -417,20 +479,24 @@ export function IncomeReceiptForm({
 
 export function ExpenseForm({
   budgetId,
+  currencies,
   disabled,
   categories,
   accounts,
   initialValues,
+  members,
   periodMonth,
   periodYear,
   recordId,
   returnPath
 }: {
   budgetId: string;
+  currencies: CurrencyOption[];
   disabled: boolean;
   categories: { id: string; name: string }[];
   accounts: { id: string; name: string }[];
   initialValues?: ExpenseFormValues;
+  members: MemberOption[];
   periodMonth: number;
   periodYear: number;
   recordId?: string;
@@ -443,12 +509,18 @@ export function ExpenseForm({
   const [formVersion, setFormVersion] = useState(0);
   const isEditing = Boolean(recordId);
   const accountOptions = [{ id: "", name: "Sin cuenta" }, ...accounts];
+  const initialMember = defaultMember(members);
+  const initialCurrency = defaultCurrency(currencies);
   const form = useForm<ExpenseFormValues>({
     resolver: zodResolver(expenseSchema),
     defaultValues: initialValues ?? {
       name: "",
-      responsibleName: "",
+      responsibleMemberId: initialMember.id,
+      responsibleName: initialMember.name,
       categoryId: categories[0]?.id ?? "",
+      currencyId: initialCurrency?.id ?? "",
+      exchangeRateToDop: initialCurrency?.isBase ? 1 : initialCurrency?.defaultRateToDop ?? 1,
+      amountType: "FIXED",
       amountBudgetedMonthly: 0,
       amountQ1: 0,
       amountQ2: 0,
@@ -485,12 +557,14 @@ export function ExpenseForm({
         })}
       >
         <TextInput label="Gasto" name="name" form={form} disabled={disabled} />
-        <TextInput label="Responsable" name="responsibleName" form={form} disabled={disabled} />
+        <MemberField form={form} members={members} disabled={disabled} />
         <SelectField label="Categoría" name="categoryId" form={form} disabled={disabled} options={categories} />
         <SelectField label="Cuenta" name="bankAccountId" form={form} disabled={disabled} options={accountOptions} />
+        <SelectField label="Tipo de monto" name="amountType" form={form} disabled={disabled} options={amountTypeOptions} />
         <MoneyInput label="Presupuesto" name="amountBudgetedMonthly" form={form} disabled={disabled} />
         <MoneyInput label="Quincena 1" name="amountQ1" form={form} disabled={disabled} />
         <MoneyInput label="Quincena 2" name="amountQ2" form={form} disabled={disabled} />
+        <CurrencyFields form={form} currencies={currencies} disabled={disabled} />
         <div className="flex items-center gap-2 pt-7">
           <input
             className="h-4 w-4 rounded border-input"
@@ -519,9 +593,11 @@ export function ExpensePaymentForm({
   accounts,
   budgetId,
   categories,
+  currencies,
   disabled,
   expenses,
   initialValues,
+  members,
   periodMonth,
   periodYear,
   recordId,
@@ -530,15 +606,20 @@ export function ExpensePaymentForm({
   accounts: { id: string; name: string }[];
   budgetId: string;
   categories: { id: string; name: string }[];
+  currencies: CurrencyOption[];
   disabled: boolean;
   expenses: {
     id: string;
     name: string;
     responsibleName: string;
+    responsibleMemberId?: string | null;
     categoryId: string;
     bankAccountId: string | null;
+    currencyId?: string | null;
+    exchangeRateToDop?: number;
   }[];
   initialValues?: ExpensePaymentFormValues;
+  members: MemberOption[];
   periodMonth: number;
   periodYear: number;
   recordId?: string;
@@ -552,14 +633,19 @@ export function ExpensePaymentForm({
   const isEditing = Boolean(recordId);
   const accountOptions = [{ id: "", name: "Sin cuenta" }, ...accounts];
   const [selectedExpenseId, setSelectedExpenseId] = useState(initialValues?.expenseId ?? "");
+  const initialMember = defaultMember(members);
+  const initialCurrency = defaultCurrency(currencies);
   const form = useForm<ExpensePaymentFormValues>({
     resolver: zodResolver(expensePaymentSchema),
     defaultValues: initialValues ?? {
       expenseId: "",
       name: "",
-      responsibleName: "",
+      responsibleMemberId: initialMember.id,
+      responsibleName: initialMember.name,
       categoryId: categories[0]?.id ?? "",
       bankAccountId: "",
+      currencyId: initialCurrency?.id ?? "",
+      exchangeRateToDop: initialCurrency?.isBase ? 1 : initialCurrency?.defaultRateToDop ?? 1,
       amount: 0,
       paidDate: defaultDateForPeriod(periodYear, periodMonth),
       notes: ""
@@ -610,6 +696,10 @@ export function ExpensePaymentForm({
               const selectedExpense = expenses.find((expense) => expense.id === value);
               if (selectedExpense) {
                 form.setValue("name", selectedExpense.name, { shouldDirty: true, shouldValidate: true });
+                form.setValue("responsibleMemberId", selectedExpense.responsibleMemberId ?? "", {
+                  shouldDirty: true,
+                  shouldValidate: true
+                });
                 form.setValue("responsibleName", selectedExpense.responsibleName, {
                   shouldDirty: true,
                   shouldValidate: true
@@ -619,6 +709,15 @@ export function ExpensePaymentForm({
                   shouldDirty: true,
                   shouldValidate: true
                 });
+                form.setValue("currencyId", selectedExpense.currencyId ?? initialCurrency?.id ?? "", {
+                  shouldDirty: true,
+                  shouldValidate: true
+                });
+                form.setValue(
+                  "exchangeRateToDop",
+                  selectedExpense.exchangeRateToDop ?? initialCurrency?.defaultRateToDop ?? 1,
+                  { shouldDirty: true, shouldValidate: true }
+                );
               }
             }}
           >
@@ -632,10 +731,11 @@ export function ExpensePaymentForm({
           <FieldError message={form.formState.errors.expenseId?.message?.toString()} />
         </div>
         <TextInput label="Gasto" name="name" form={form} disabled={disabled} />
-        <TextInput label="Responsable" name="responsibleName" form={form} disabled={disabled} />
+        <MemberField form={form} members={members} disabled={disabled || Boolean(selectedExpenseId)} />
         <SelectField label="Categoría" name="categoryId" form={form} disabled={disabled} options={categories} />
         <SelectField label="Cuenta" name="bankAccountId" form={form} disabled={disabled} options={accountOptions} />
         <MoneyInput label="Monto pagado" name="amount" form={form} disabled={disabled} />
+        <CurrencyFields form={form} currencies={currencies} disabled={disabled} />
         <TextInput label="Fecha pagada" name="paidDate" form={form} disabled={disabled} type="date" />
         <TextInput label="Notas" name="notes" form={form} disabled={disabled} />
         <FormFooter
@@ -653,16 +753,20 @@ export function ExpensePaymentForm({
 
 export function DebtForm({
   budgetId,
+  currencies,
   disabled,
   initialValues,
+  members,
   periodMonth,
   periodYear,
   recordId,
   returnPath
 }: {
   budgetId: string;
+  currencies: CurrencyOption[];
   disabled: boolean;
   initialValues?: DebtFormValues;
+  members: MemberOption[];
   periodMonth: number;
   periodYear: number;
   recordId?: string;
@@ -674,12 +778,17 @@ export function DebtForm({
   const [success, setSuccess] = useState<string>();
   const [formVersion, setFormVersion] = useState(0);
   const isEditing = Boolean(recordId);
+  const initialMember = defaultMember(members);
+  const initialCurrency = defaultCurrency(currencies);
   const form = useForm<DebtFormValues>({
     resolver: zodResolver(debtSchema),
     defaultValues: initialValues ?? {
       name: "",
       entity: "",
-      responsibleName: "",
+      responsibleMemberId: initialMember.id,
+      responsibleName: initialMember.name,
+      currencyId: initialCurrency?.id ?? "",
+      exchangeRateToDop: initialCurrency?.isBase ? 1 : initialCurrency?.defaultRateToDop ?? 1,
       pendingBalance: 0,
       monthlyPayment: 0,
       annualInterestRate: 0,
@@ -717,7 +826,7 @@ export function DebtForm({
       >
         <TextInput label="Deuda" name="name" form={form} disabled={disabled} />
         <TextInput label="Entidad" name="entity" form={form} disabled={disabled} />
-        <TextInput label="Responsable" name="responsibleName" form={form} disabled={disabled} />
+        <MemberField form={form} members={members} disabled={disabled} />
         <SelectField
           label="Estrategia"
           name="strategy"
@@ -731,6 +840,7 @@ export function DebtForm({
         />
         <MoneyInput label="Saldo" name="pendingBalance" form={form} disabled={disabled} />
         <MoneyInput label="Cuota mensual" name="monthlyPayment" form={form} disabled={disabled} />
+        <CurrencyFields form={form} currencies={currencies} disabled={disabled} />
         <MoneyInput label="Interés anual %" name="annualInterestRate" form={form} disabled={disabled} />
         <MoneyInput label="Meses restantes" name="remainingMonths" form={form} disabled={disabled} step="1" />
         <TextInput label="Notas" name="notes" form={form} disabled={disabled} />
@@ -962,6 +1072,114 @@ function TextInput<T extends FieldValues>({
       <Input disabled={disabled} id={name} type={type} {...form.register(name)} />
       <FieldError message={form.formState.errors[name]?.message?.toString()} />
     </div>
+  );
+}
+
+function MemberField<T extends FieldValues>({
+  form,
+  members,
+  disabled
+}: {
+  form: UseFormReturn<T>;
+  members: MemberOption[];
+  disabled: boolean;
+}) {
+  const memberIdName = "responsibleMemberId" as Path<T>;
+  const memberNameName = "responsibleName" as Path<T>;
+
+  if (members.length === 0) {
+    return <TextInput label="Responsable" name={memberNameName} form={form} disabled={disabled} />;
+  }
+
+  const selectedMemberId = (form.watch(memberIdName) as string | undefined) ?? defaultMember(members).id;
+
+  return (
+    <div className="space-y-2">
+      <Label htmlFor="responsibleMemberId">Responsable</Label>
+      <Select
+        disabled={disabled}
+        id="responsibleMemberId"
+        value={selectedMemberId}
+        onChange={(event) => {
+          const selectedMember = members.find((member) => member.id === event.target.value) ?? defaultMember(members);
+          form.setValue(memberIdName, selectedMember.id as PathValue<T, Path<T>>, {
+            shouldDirty: true,
+            shouldValidate: true
+          });
+          form.setValue(memberNameName, selectedMember.name as PathValue<T, Path<T>>, {
+            shouldDirty: true,
+            shouldValidate: true
+          });
+        }}
+      >
+        {members.map((member) => (
+          <option key={member.id} value={member.id}>
+            {member.name}
+          </option>
+        ))}
+      </Select>
+      <FieldError message={form.formState.errors[memberIdName]?.message?.toString()} />
+      <input type="hidden" {...form.register(memberNameName)} />
+      <input type="hidden" {...form.register(memberIdName)} />
+    </div>
+  );
+}
+
+function CurrencyFields<T extends FieldValues>({
+  form,
+  currencies,
+  disabled
+}: {
+  form: UseFormReturn<T>;
+  currencies: CurrencyOption[];
+  disabled: boolean;
+}) {
+  const currencyIdName = "currencyId" as Path<T>;
+  const exchangeRateName = "exchangeRateToDop" as Path<T>;
+  const fallbackCurrency = defaultCurrency(currencies);
+
+  if (!fallbackCurrency) return null;
+
+  const selectedCurrencyId = (form.watch(currencyIdName) as string | undefined) || fallbackCurrency.id;
+  const selectedCurrency = currencies.find((currency) => currency.id === selectedCurrencyId) ?? fallbackCurrency;
+
+  return (
+    <>
+      <div className="space-y-2">
+        <Label htmlFor="currencyId">Moneda</Label>
+        <Select
+          disabled={disabled}
+          id="currencyId"
+          value={selectedCurrencyId}
+          onChange={(event) => {
+            const selected = currencies.find((currency) => currency.id === event.target.value) ?? fallbackCurrency;
+            form.setValue(currencyIdName, selected.id as PathValue<T, Path<T>>, {
+              shouldDirty: true,
+              shouldValidate: true
+            });
+            form.setValue(exchangeRateName, (selected.isBase ? 1 : selected.defaultRateToDop) as PathValue<T, Path<T>>, {
+              shouldDirty: true,
+              shouldValidate: true
+            });
+          }}
+        >
+          {currencies.map((currency) => (
+            <option key={currency.id} value={currency.id}>
+              {currency.code} - {currency.name}
+            </option>
+          ))}
+        </Select>
+        <FieldError message={form.formState.errors[currencyIdName]?.message?.toString()} />
+        <input type="hidden" {...form.register(currencyIdName)} />
+      </div>
+      <MoneyInput
+        label="Tasa a DOP"
+        name={exchangeRateName}
+        form={form}
+        disabled={disabled || selectedCurrency.isBase}
+        step="0.0001"
+      />
+    </>
   );
 }
 

@@ -36,6 +36,18 @@ function formatDate(value: Date | string | null | undefined) {
   }).format(new Date(value));
 }
 
+function responsibleLabel(record: {
+  responsibleName: string;
+  responsibleMember?: {
+    user: {
+      name: string | null;
+      email: string | null;
+    };
+  } | null;
+}) {
+  return record.responsibleMember?.user.name || record.responsibleMember?.user.email || record.responsibleName;
+}
+
 export default async function ExpensesPage({ params, searchParams }: PageProps) {
   const { budgetId } = await params;
   const query = await searchParams;
@@ -48,6 +60,18 @@ export default async function ExpensesPage({ params, searchParams }: PageProps) 
   const returnPath = periodHref(basePath, selection.year, selection.month);
   const editExpense = selectedPeriod?.expenses.find((expense) => expense.id === query?.editExpense);
   const editPayment = selectedPeriod?.expensePayments.find((payment) => payment.id === query?.editPayment);
+  const memberOptions = budget.workspace.members.map((member) => ({
+    id: member.id,
+    name: member.user.name || member.user.email || "Miembro"
+  }));
+  const currencyOptions = budget.currencies.filter((currency) => currency.isActive).map((currency) => ({
+    id: currency.id,
+    code: currency.code,
+    name: currency.name,
+    symbol: currency.symbol,
+    defaultRateToDop: Number(currency.defaultRateToDop),
+    isBase: currency.isBase
+  }));
 
   return (
     <div className="space-y-6">
@@ -85,22 +109,28 @@ export default async function ExpensesPage({ params, searchParams }: PageProps) 
         accounts={budget.bankAccounts.map((account) => ({ id: account.id, name: account.name }))}
         budgetId={budgetId}
         categories={budget.categories.map((category) => ({ id: category.id, name: category.name }))}
+        currencies={currencyOptions}
         disabled={!access.canEdit}
         initialValues={
           editExpense
             ? {
                 name: editExpense.name,
+                responsibleMemberId: editExpense.responsibleMemberId ?? "",
                 responsibleName: editExpense.responsibleName,
                 categoryId: editExpense.categoryId,
-                amountBudgetedMonthly: Number(editExpense.amountBudgetedMonthly),
-                amountQ1: Number(editExpense.amountQ1),
-                amountQ2: Number(editExpense.amountQ2),
+                currencyId: editExpense.currencyId ?? "",
+                exchangeRateToDop: Number(editExpense.exchangeRateToDop),
+                amountType: editExpense.amountType,
+                amountBudgetedMonthly: Number(editExpense.amountBudgetedOriginal),
+                amountQ1: Number(editExpense.amountQ1Original),
+                amountQ2: Number(editExpense.amountQ2Original),
                 bankAccountId: editExpense.bankAccountId ?? "",
                 isRecurring: editExpense.isRecurring,
                 notes: editExpense.notes ?? ""
               }
             : undefined
         }
+        members={memberOptions}
         periodMonth={selection.month}
         periodYear={selection.year}
         recordId={editExpense?.id}
@@ -111,28 +141,36 @@ export default async function ExpensesPage({ params, searchParams }: PageProps) 
         accounts={budget.bankAccounts.map((account) => ({ id: account.id, name: account.name }))}
         budgetId={budgetId}
         categories={budget.categories.map((category) => ({ id: category.id, name: category.name }))}
+        currencies={currencyOptions}
         disabled={!access.canEdit}
         expenses={selectedPeriod?.expenses.map((expense) => ({
           id: expense.id,
           name: expense.name,
+          responsibleMemberId: expense.responsibleMemberId,
           responsibleName: expense.responsibleName,
           categoryId: expense.categoryId,
-          bankAccountId: expense.bankAccountId
+          bankAccountId: expense.bankAccountId,
+          currencyId: expense.currencyId,
+          exchangeRateToDop: Number(expense.exchangeRateToDop)
         })) ?? []}
         initialValues={
           editPayment
             ? {
                 expenseId: editPayment.expenseId ?? "",
                 name: editPayment.expense?.name ?? editPayment.name,
+                responsibleMemberId: editPayment.expense?.responsibleMemberId ?? editPayment.responsibleMemberId ?? "",
                 responsibleName: editPayment.expense?.responsibleName ?? editPayment.responsibleName,
                 categoryId: editPayment.expense?.categoryId ?? editPayment.categoryId,
                 bankAccountId: editPayment.expense?.bankAccountId ?? editPayment.bankAccountId ?? "",
-                amount: Number(editPayment.amount),
+                currencyId: editPayment.currencyId ?? editPayment.expense?.currencyId ?? "",
+                exchangeRateToDop: Number(editPayment.exchangeRateToDop),
+                amount: Number(editPayment.amountOriginal),
                 paidDate: formatDateInput(editPayment.paidDate),
                 notes: editPayment.notes ?? ""
               }
             : undefined
         }
+        members={memberOptions}
         periodMonth={selection.month}
         periodYear={selection.year}
         recordId={editPayment?.id}
@@ -147,7 +185,8 @@ export default async function ExpensesPage({ params, searchParams }: PageProps) 
               <TableHead>Responsable</TableHead>
               <TableHead>Categoría</TableHead>
               <TableHead>Cuenta</TableHead>
-              <TableHead>Presupuesto</TableHead>
+              <TableHead>Presupuesto DOP</TableHead>
+              <TableHead>Original</TableHead>
               <TableHead>Real</TableHead>
               <TableHead>Diferencia</TableHead>
               <TableHead>Estado</TableHead>
@@ -163,10 +202,11 @@ export default async function ExpensesPage({ params, searchParams }: PageProps) 
               return (
               <TableRow key={expense.id}>
                 <TableCell className="font-medium" data-label="Gasto">{expense.name}</TableCell>
-                <TableCell data-label="Responsable">{expense.responsibleName}</TableCell>
+                <TableCell data-label="Responsable">{responsibleLabel(expense)}</TableCell>
                 <TableCell data-label="Categoría">{expense.category.name}</TableCell>
                 <TableCell data-label="Cuenta">{expense.bankAccount?.name ?? "Sin cuenta"}</TableCell>
-                <TableCell data-label="Presupuesto">{formatCurrency(expense.amountBudgetedMonthly)}</TableCell>
+                <TableCell data-label="Presupuesto DOP">{formatCurrency(expense.amountBudgetedMonthly)}</TableCell>
+                <TableCell data-label="Original">{formatCurrency(expense.amountBudgetedOriginal, expense.currencySymbol)} {expense.currencyCode}</TableCell>
                 <TableCell data-label="Real">{formatCurrency(actualAmount)}</TableCell>
                 <TableCell data-label="Diferencia">{formatCurrency(difference)}</TableCell>
                 <TableCell data-label="Estado">
@@ -198,7 +238,8 @@ export default async function ExpensesPage({ params, searchParams }: PageProps) 
               <TableHead>Responsable</TableHead>
               <TableHead>CategorÃ­a</TableHead>
               <TableHead>Cuenta</TableHead>
-              <TableHead>Monto pagado</TableHead>
+              <TableHead>Monto DOP</TableHead>
+              <TableHead>Original</TableHead>
               <TableHead>Notas</TableHead>
               <TableHead />
             </TableRow>
@@ -208,10 +249,11 @@ export default async function ExpensesPage({ params, searchParams }: PageProps) 
               <TableRow key={payment.id}>
                 <TableCell data-label="Fecha">{formatDate(payment.paidDate)}</TableCell>
                 <TableCell className="font-medium" data-label="Gasto">{payment.expense?.name ?? payment.name}</TableCell>
-                <TableCell data-label="Responsable">{payment.expense?.responsibleName ?? payment.responsibleName}</TableCell>
+                <TableCell data-label="Responsable">{payment.expense ? responsibleLabel(payment.expense) : responsibleLabel(payment)}</TableCell>
                 <TableCell data-label="CategorÃ­a">{payment.category.name}</TableCell>
                 <TableCell data-label="Cuenta">{payment.bankAccount?.name ?? "Sin cuenta"}</TableCell>
-                <TableCell data-label="Monto pagado">{formatCurrency(payment.amount)}</TableCell>
+                <TableCell data-label="Monto DOP">{formatCurrency(payment.amount)}</TableCell>
+                <TableCell data-label="Original">{formatCurrency(payment.amountOriginal, payment.currencySymbol)} {payment.currencyCode}</TableCell>
                 <TableCell data-label="Notas">{payment.notes ?? ""}</TableCell>
                 <TableCell className="text-right" data-label="">
                   {access.canEdit ? (

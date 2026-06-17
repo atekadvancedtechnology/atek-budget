@@ -153,6 +153,12 @@ model WorkspaceMember {
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  responsibleIncomes         Income[]         @relation("IncomeResponsibleMember")
+  responsibleIncomeReceipts  IncomeReceipt[]  @relation("IncomeReceiptResponsibleMember")
+  responsibleExpenses        Expense[]        @relation("ExpenseResponsibleMember")
+  responsibleExpensePayments ExpensePayment[] @relation("ExpensePaymentResponsibleMember")
+  responsibleDebts           Debt[]           @relation("DebtResponsibleMember")
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -175,12 +181,37 @@ model Budget {
   periods      BudgetPeriod[]
   categories   ExpenseCategory[]
   bankAccounts BankAccount[]
+  currencies   Currency[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([workspaceId, name])
   @@index([workspaceId])
+}
+
+model Currency {
+  id               String  @id @default(cuid())
+  budgetId         String
+  code             String
+  name             String
+  symbol           String
+  defaultRateToDop Decimal @default(1) @db.Decimal(12, 4)
+  isBase           Boolean @default(false)
+  isActive         Boolean @default(true)
+
+  budget          Budget           @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  incomes         Income[]         @relation("IncomeCurrency")
+  incomeReceipts  IncomeReceipt[]  @relation("IncomeReceiptCurrency")
+  expenses        Expense[]        @relation("ExpenseCurrency")
+  expensePayments ExpensePayment[] @relation("ExpensePaymentCurrency")
+  debts           Debt[]           @relation("DebtCurrency")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([budgetId, code])
+  @@index([budgetId, isActive])
 }
 
 model BudgetPeriod {
@@ -190,13 +221,13 @@ model BudgetPeriod {
   month    Int
   status   PeriodStatus @default(DRAFT)
 
-  budget         Budget          @relation(fields: [budgetId], references: [id], onDelete: Cascade)
-  incomes        Income[]
-  incomeReceipts IncomeReceipt[]
-  expenses       Expense[]
+  budget          Budget           @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  incomes         Income[]
+  incomeReceipts  IncomeReceipt[]
+  expenses        Expense[]
   expensePayments ExpensePayment[]
-  debts          Debt[]
-  savingGoals    SavingGoal[]
+  debts           Debt[]
+  savingGoals     SavingGoal[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -209,6 +240,13 @@ model Income {
   id                  String           @id @default(cuid())
   budgetPeriodId      String
   responsibleName     String
+  responsibleMemberId String?
+  currencyId          String?
+  currencyCode        String           @default("DOP")
+  currencySymbol      String           @default("RD$")
+  amountOriginal      Decimal          @default(0) @db.Decimal(12, 2)
+  exchangeRateToDop   Decimal          @default(1) @db.Decimal(12, 4)
+  amountDop           Decimal          @default(0) @db.Decimal(12, 2)
   amount              Decimal          @default(0) @db.Decimal(12, 2)
   amountType          IncomeAmountType @default(FIXED)
   frequency           IncomeFrequency  @default(MONTHLY)
@@ -225,38 +263,53 @@ model Income {
   createdById         String?
   updatedById         String?
 
-  budgetPeriod BudgetPeriod    @relation(fields: [budgetPeriodId], references: [id], onDelete: Cascade)
-  receipts     IncomeReceipt[]
-  createdBy    User?           @relation("IncomeCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedBy    User?           @relation("IncomeUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  budgetPeriod      BudgetPeriod     @relation(fields: [budgetPeriodId], references: [id], onDelete: Cascade)
+  responsibleMember WorkspaceMember? @relation("IncomeResponsibleMember", fields: [responsibleMemberId], references: [id], onDelete: SetNull)
+  currency          Currency?        @relation("IncomeCurrency", fields: [currencyId], references: [id], onDelete: SetNull)
+  receipts          IncomeReceipt[]
+  createdBy         User?            @relation("IncomeCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy         User?            @relation("IncomeUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([budgetPeriodId, responsibleName, source])
+  @@index([responsibleMemberId])
+  @@index([currencyId])
   @@index([createdById])
 }
 
 model IncomeReceipt {
-  id              String   @id @default(cuid())
-  budgetPeriodId  String
-  incomeId        String?
-  responsibleName String
-  source          String
-  amount          Decimal  @db.Decimal(12, 2)
-  receivedDate    DateTime
-  notes           String?
-  createdById     String?
+  id                  String   @id @default(cuid())
+  budgetPeriodId      String
+  incomeId            String?
+  responsibleName     String
+  responsibleMemberId String?
+  currencyId          String?
+  currencyCode        String   @default("DOP")
+  currencySymbol      String   @default("RD$")
+  amountOriginal      Decimal  @default(0) @db.Decimal(12, 2)
+  exchangeRateToDop   Decimal  @default(1) @db.Decimal(12, 4)
+  amountDop           Decimal  @default(0) @db.Decimal(12, 2)
+  source              String
+  amount              Decimal  @db.Decimal(12, 2)
+  receivedDate        DateTime
+  notes               String?
+  createdById         String?
 
-  budgetPeriod BudgetPeriod @relation(fields: [budgetPeriodId], references: [id], onDelete: Cascade)
-  income       Income?      @relation(fields: [incomeId], references: [id], onDelete: SetNull)
-  createdBy    User?        @relation("IncomeReceiptCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  budgetPeriod      BudgetPeriod     @relation(fields: [budgetPeriodId], references: [id], onDelete: Cascade)
+  income            Income?          @relation(fields: [incomeId], references: [id], onDelete: SetNull)
+  responsibleMember WorkspaceMember? @relation("IncomeReceiptResponsibleMember", fields: [responsibleMemberId], references: [id], onDelete: SetNull)
+  currency          Currency?        @relation("IncomeReceiptCurrency", fields: [currencyId], references: [id], onDelete: SetNull)
+  createdBy         User?            @relation("IncomeReceiptCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([budgetPeriodId, receivedDate])
   @@index([incomeId])
+  @@index([responsibleMemberId])
+  @@index([currencyId])
   @@index([createdById])
 }
 
@@ -297,66 +350,91 @@ model BankAccount {
 }
 
 model Expense {
-  id                    String        @id @default(cuid())
-  budgetPeriodId        String
-  name                  String
-  responsibleName       String
-  categoryId            String
-  amountBudgetedMonthly Decimal       @db.Decimal(12, 2)
-  amountQ1              Decimal       @db.Decimal(12, 2)
-  amountQ2              Decimal       @db.Decimal(12, 2)
-  bankAccountId         String?
-  actualAmount          Decimal?      @db.Decimal(12, 2)
-  difference            Decimal       @default(0) @db.Decimal(12, 2)
-  status                ExpenseStatus @default(PENDING)
-  expenseDate           DateTime?
-  isRecurring           Boolean       @default(true)
-  isActive              Boolean       @default(true)
-  notes                 String?
-  createdById           String?
-  updatedById           String?
+  id                     String           @id @default(cuid())
+  budgetPeriodId         String
+  name                   String
+  responsibleName        String
+  responsibleMemberId    String?
+  categoryId             String
+  currencyId             String?
+  currencyCode           String           @default("DOP")
+  currencySymbol         String           @default("RD$")
+  amountType             IncomeAmountType @default(FIXED)
+  amountBudgetedOriginal Decimal          @default(0) @db.Decimal(12, 2)
+  amountQ1Original       Decimal          @default(0) @db.Decimal(12, 2)
+  amountQ2Original       Decimal          @default(0) @db.Decimal(12, 2)
+  exchangeRateToDop      Decimal          @default(1) @db.Decimal(12, 4)
+  amountBudgetedDop      Decimal          @default(0) @db.Decimal(12, 2)
+  amountBudgetedMonthly  Decimal          @db.Decimal(12, 2)
+  amountQ1               Decimal          @db.Decimal(12, 2)
+  amountQ2               Decimal          @db.Decimal(12, 2)
+  bankAccountId          String?
+  actualAmount           Decimal?         @db.Decimal(12, 2)
+  difference             Decimal          @default(0) @db.Decimal(12, 2)
+  status                 ExpenseStatus    @default(PENDING)
+  expenseDate            DateTime?
+  isRecurring            Boolean          @default(true)
+  isActive               Boolean          @default(true)
+  notes                  String?
+  createdById            String?
+  updatedById            String?
 
-  budgetPeriod BudgetPeriod    @relation(fields: [budgetPeriodId], references: [id], onDelete: Cascade)
-  category     ExpenseCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  bankAccount  BankAccount?    @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
-  payments     ExpensePayment[]
-  createdBy    User?           @relation("ExpenseCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedBy    User?           @relation("ExpenseUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  budgetPeriod      BudgetPeriod     @relation(fields: [budgetPeriodId], references: [id], onDelete: Cascade)
+  responsibleMember WorkspaceMember? @relation("ExpenseResponsibleMember", fields: [responsibleMemberId], references: [id], onDelete: SetNull)
+  category          ExpenseCategory  @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  currency          Currency?        @relation("ExpenseCurrency", fields: [currencyId], references: [id], onDelete: SetNull)
+  bankAccount       BankAccount?     @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
+  payments          ExpensePayment[]
+  createdBy         User?            @relation("ExpenseCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy         User?            @relation("ExpenseUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([budgetPeriodId, name])
+  @@index([responsibleMemberId])
   @@index([categoryId])
+  @@index([currencyId])
   @@index([bankAccountId])
 }
 
 model ExpensePayment {
-  id              String   @id @default(cuid())
-  budgetPeriodId  String
-  expenseId       String?
-  name            String
-  responsibleName String
-  categoryId      String
-  bankAccountId   String?
-  amount          Decimal  @db.Decimal(12, 2)
-  paidDate        DateTime
-  notes           String?
-  createdById     String?
+  id                  String   @id @default(cuid())
+  budgetPeriodId      String
+  expenseId           String?
+  name                String
+  responsibleName     String
+  responsibleMemberId String?
+  categoryId          String
+  bankAccountId       String?
+  currencyId          String?
+  currencyCode        String   @default("DOP")
+  currencySymbol      String   @default("RD$")
+  amountOriginal      Decimal  @default(0) @db.Decimal(12, 2)
+  exchangeRateToDop   Decimal  @default(1) @db.Decimal(12, 4)
+  amountDop           Decimal  @default(0) @db.Decimal(12, 2)
+  amount              Decimal  @db.Decimal(12, 2)
+  paidDate            DateTime
+  notes               String?
+  createdById         String?
 
-  budgetPeriod BudgetPeriod    @relation(fields: [budgetPeriodId], references: [id], onDelete: Cascade)
-  expense      Expense?        @relation(fields: [expenseId], references: [id], onDelete: SetNull)
-  category     ExpenseCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  bankAccount  BankAccount?    @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
-  createdBy    User?           @relation("ExpensePaymentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  budgetPeriod      BudgetPeriod     @relation(fields: [budgetPeriodId], references: [id], onDelete: Cascade)
+  expense           Expense?         @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+  responsibleMember WorkspaceMember? @relation("ExpensePaymentResponsibleMember", fields: [responsibleMemberId], references: [id], onDelete: SetNull)
+  category          ExpenseCategory  @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  bankAccount       BankAccount?     @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
+  currency          Currency?        @relation("ExpensePaymentCurrency", fields: [currencyId], references: [id], onDelete: SetNull)
+  createdBy         User?            @relation("ExpensePaymentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([budgetPeriodId, paidDate])
   @@index([expenseId])
+  @@index([responsibleMemberId])
   @@index([categoryId])
   @@index([bankAccountId])
+  @@index([currencyId])
   @@index([createdById])
 }
 
@@ -366,6 +444,15 @@ model Debt {
   name                   String
   entity                 String
   responsibleName        String
+  responsibleMemberId    String?
+  currencyId             String?
+  currencyCode           String       @default("DOP")
+  currencySymbol         String       @default("RD$")
+  pendingBalanceOriginal Decimal      @default(0) @db.Decimal(12, 2)
+  monthlyPaymentOriginal Decimal      @default(0) @db.Decimal(12, 2)
+  exchangeRateToDop      Decimal      @default(1) @db.Decimal(12, 4)
+  pendingBalanceDop      Decimal      @default(0) @db.Decimal(12, 2)
+  monthlyPaymentDop      Decimal      @default(0) @db.Decimal(12, 2)
   pendingBalance         Decimal      @db.Decimal(12, 2)
   monthlyPayment         Decimal      @db.Decimal(12, 2)
   annualInterestRate     Decimal      @db.Decimal(6, 2)
@@ -379,14 +466,18 @@ model Debt {
   createdById            String?
   updatedById            String?
 
-  budgetPeriod BudgetPeriod @relation(fields: [budgetPeriodId], references: [id], onDelete: Cascade)
-  createdBy    User?        @relation("DebtCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedBy    User?        @relation("DebtUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  budgetPeriod      BudgetPeriod     @relation(fields: [budgetPeriodId], references: [id], onDelete: Cascade)
+  responsibleMember WorkspaceMember? @relation("DebtResponsibleMember", fields: [responsibleMemberId], references: [id], onDelete: SetNull)
+  currency          Currency?        @relation("DebtCurrency", fields: [currencyId], references: [id], onDelete: SetNull)
+  createdBy         User?            @relation("DebtCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy         User?            @relation("DebtUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([budgetPeriodId, name, entity])
+  @@index([responsibleMemberId])
+  @@index([currencyId])
 }
 
 model SavingGoal {
