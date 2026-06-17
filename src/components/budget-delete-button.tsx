@@ -4,7 +4,7 @@ import { Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTransition } from "react";
 
-import { Button } from "@/components/ui/button";
+import { ConfirmButton } from "@/components/confirm-button";
 import { deleteBudgetAction } from "@/lib/actions";
 
 export function BudgetDeleteButton({
@@ -24,12 +24,6 @@ export function BudgetDeleteButton({
   const [isPending, startTransition] = useTransition();
 
   function handleDelete() {
-    const confirmed = window.confirm(
-      `Eliminar el presupuesto "${budgetName}" borrara todos sus periodos, ingresos, recibos, gastos, deudas, metas, categorias y cuentas. Esta accion no se puede deshacer.`
-    );
-
-    if (!confirmed) return;
-
     startTransition(async () => {
       try {
         await deleteBudgetAction(budgetId);
@@ -42,16 +36,18 @@ export function BudgetDeleteButton({
   }
 
   return (
-    <Button
+    <ConfirmButton
       className={className}
+      confirmDescription={`Eliminar el presupuesto "${budgetName}" borrara todos sus periodos, ingresos, recibos, gastos, deudas, metas, categorias y cuentas. Esta accion no se puede deshacer.`}
+      confirmLabel="Eliminar presupuesto"
+      confirmTitle="Eliminar presupuesto"
       disabled={disabled || isPending}
+      onConfirm={handleDelete}
       size={compact ? "sm" : "default"}
-      type="button"
       variant="destructive"
-      onClick={handleDelete}
     >
       <Trash2 aria-hidden="true" className="h-4 w-4" />
       {isPending ? "Eliminando..." : compact ? "Eliminar" : "Eliminar presupuesto"}
-    </Button>
+    </ConfirmButton>
   );
 }

@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useTransition } from "react";
 
+import { ConfirmButton } from "@/components/confirm-button";
+import { Button } from "@/components/ui/button";
 import {
   deleteDebtAction,
   deleteExpenseAction,
@@ -14,7 +16,6 @@ import {
   deleteSavingGoalAction,
   markDebtPaidAction
 } from "@/lib/actions";
-import { Button } from "@/components/ui/button";
 
 type RecordEntity = "income" | "incomeReceipt" | "expense" | "expensePayment" | "debt" | "savingGoal";
 
@@ -61,7 +62,7 @@ export function RecordActions({
         await action();
         router.refresh();
       } catch (error) {
-        window.alert(error instanceof Error ? error.message : "No se pudo completar la acción.");
+        window.alert(error instanceof Error ? error.message : "No se pudo completar la accion.");
       }
     });
   }
@@ -87,21 +88,20 @@ export function RecordActions({
           <CheckCircle2 aria-hidden="true" className="h-4 w-4" />
         </Button>
       ) : null}
-      <Button
+      <ConfirmButton
         aria-label={`Eliminar ${label}`}
         className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+        confirmDescription={`Eliminar este ${label}? Esta accion no se puede deshacer.`}
+        confirmLabel="Eliminar"
+        confirmTitle={`Eliminar ${label}`}
         disabled={isPending}
+        onConfirm={() => runAction(() => deleteActions[entity](budgetId, recordId))}
         size="icon"
         title={`Eliminar ${label}`}
-        type="button"
         variant="ghost"
-        onClick={() => {
-          if (!window.confirm(`¿Eliminar este ${label}? Esta acción no se puede deshacer.`)) return;
-          runAction(() => deleteActions[entity](budgetId, recordId));
-        }}
       >
         <Trash2 aria-hidden="true" className="h-4 w-4" />
-      </Button>
+      </ConfirmButton>
     </div>
   );
 }

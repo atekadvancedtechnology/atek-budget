@@ -4,6 +4,7 @@ import { Pencil, Plus, Save, Trash2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState, useTransition } from "react";
 
+import { ConfirmButton } from "@/components/confirm-button";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -87,11 +88,6 @@ export function BankAccountManager({
   }
 
   function deleteAccount(account: BankAccountItem) {
-    const confirmed = window.confirm(
-      `Eliminar la cuenta "${account.name}"? Esta accion no se puede deshacer.`
-    );
-
-    if (!confirmed) return;
     setError(undefined);
     setSuccess(undefined);
 
@@ -217,22 +213,24 @@ export function BankAccountManager({
                         >
                           <Pencil aria-hidden="true" className="h-4 w-4" />
                         </Button>
-                        <Button
+                        <ConfirmButton
                           aria-label={`Eliminar cuenta ${account.name}`}
                           className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          confirmDescription={`Eliminar la cuenta "${account.name}"? Esta accion no se puede deshacer.`}
+                          confirmLabel="Eliminar"
+                          confirmTitle="Eliminar cuenta"
                           disabled={isPending}
+                          onConfirm={() => deleteAccount(account)}
                           size="icon"
                           title={
                             account.usageCount > 0
                               ? "No se puede eliminar porque tiene gastos o pagos"
                               : "Eliminar cuenta"
                           }
-                          type="button"
                           variant="ghost"
-                          onClick={() => deleteAccount(account)}
                         >
                           <Trash2 aria-hidden="true" className="h-4 w-4" />
-                        </Button>
+                        </ConfirmButton>
                       </div>
                     ) : null}
                   </TableCell>
