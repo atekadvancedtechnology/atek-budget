@@ -23,7 +23,6 @@ export type IncomeFrequencyValue =
 
 type IncomeLike = {
   amount?: DecimalLike;
-  amountMonthly?: DecimalLike;
   amountQ1?: DecimalLike;
   amountQ2?: DecimalLike;
   frequency?: IncomeFrequencyValue;
@@ -122,7 +121,7 @@ export function emergencyFundProgress(current: DecimalLike, target: DecimalLike)
 }
 
 function getIncomeAmount(income: IncomeLike) {
-  return toNumber(income.amount ?? income.amountMonthly);
+  return toNumber(income.amount);
 }
 
 function toDate(value: Date | string | null | undefined) {
@@ -168,37 +167,6 @@ function countExpectedPaymentDays(income: IncomeLike, year: number, month: numbe
   if (days.length === 0) return 0;
   const lastDay = daysInMonth(year, month);
   return days.filter((day) => day >= 1 && day <= lastDay).length;
-}
-
-export function estimateMonthlyIncome(income: IncomeLike) {
-  const amount = getIncomeAmount(income);
-  const frequency = income.frequency ?? "MONTHLY";
-
-  switch (frequency) {
-    case "ONE_TIME":
-      return amount;
-    case "DAILY":
-      return amount * 365 / 12;
-    case "WEEKLY":
-      return amount * 52 / 12;
-    case "BIWEEKLY":
-      return amount * 26 / 12;
-    case "MONTHLY":
-      return amount;
-    case "BIMONTHLY":
-      return amount / 2;
-    case "QUARTERLY":
-      return amount / 3;
-    case "SEMIANNUAL":
-      return amount / 6;
-    case "ANNUAL":
-      return amount / 12;
-    case "IRREGULAR":
-    case "CUSTOM":
-      return amount;
-    default:
-      return amount;
-  }
 }
 
 export function estimateAnnualIncome(income: IncomeLike) {
@@ -349,7 +317,6 @@ export function buildBudgetSummary(input: {
   const activeExpenses = input.expenses.filter((expense) => expense.isActive !== false);
   const activeDebts = input.debts.filter((debt) => debt.status !== "PAID" && debt.status !== "CANCELLED");
 
-  const totalIncomeMonthly = sum(activeIncomes.map((income) => estimateMonthlyIncome(income)));
   const totalIncomeExpected = sum(activeIncomes.map((income) => expectedIncomeForPeriod(income, input.year, input.month)));
   const totalIncomeQ1 = sum(activeIncomes.map((income) => expectedIncomeByFortnight(income, input.year, input.month).q1));
   const totalIncomeQ2 = sum(activeIncomes.map((income) => expectedIncomeByFortnight(income, input.year, input.month).q2));
@@ -368,9 +335,9 @@ export function buildBudgetSummary(input: {
   const debtQ1 = totalDebtMonthlyPayments / 2;
   const debtQ2 = totalDebtMonthlyPayments / 2;
   const availableBalanceReal = totalIncomeReceived - totalActualExpenses - totalSavingContributed - totalDebtMonthlyPayments;
+  const incomePercentBase = totalIncomeReceived > 0 ? totalIncomeReceived : totalIncomeExpected;
 
   return {
-    totalIncomeMonthly,
     totalIncomeExpected,
     totalIncomeQ1,
     totalIncomeQ2,
@@ -383,16 +350,16 @@ export function buildBudgetSummary(input: {
     totalSavingContributed,
     totalDebtPending,
     totalDebtMonthlyPayments,
-    availableBalance: totalIncomeMonthly - totalActualExpenses - totalSavingContributed - totalDebtMonthlyPayments,
+    availableBalance: totalIncomeExpected - totalActualExpenses - totalSavingContributed - totalDebtMonthlyPayments,
     availableBalanceReal,
     availableBalanceQ1: totalIncomeQ1 - totalExpensesQ1 - savingQ1 - debtQ1,
     availableBalanceQ2: totalIncomeQ2 - totalExpensesQ2 - savingQ2 - debtQ2,
-    expensePercentOfIncome: safePercent(totalActualExpenses, totalIncomeMonthly),
-    budgetedExpensePercentOfIncome: safePercent(totalBudgetedExpenses, totalIncomeMonthly),
-    savingPercentOfIncome: safePercent(totalSavingContributed, totalIncomeMonthly),
-    debtPaymentPercentOfIncome: safePercent(totalDebtMonthlyPayments, totalIncomeMonthly),
+    expensePercentOfIncome: safePercent(totalActualExpenses, incomePercentBase),
+    budgetedExpensePercentOfIncome: safePercent(totalBudgetedExpenses, totalIncomeExpected),
+    savingPercentOfIncome: safePercent(totalSavingContributed, incomePercentBase),
+    debtPaymentPercentOfIncome: safePercent(totalDebtMonthlyPayments, incomePercentBase),
     generalStatus:
-      totalActualExpenses + totalSavingContributed + totalDebtMonthlyPayments <= totalIncomeMonthly ? "OK" : "EXCEEDED",
+      totalActualExpenses + totalSavingContributed + totalDebtMonthlyPayments <= totalIncomeExpected ? "OK" : "EXCEEDED",
     generalStatusReal:
       totalActualExpenses + totalSavingContributed + totalDebtMonthlyPayments <= totalIncomeReceived ? "OK" : "EXCEEDED"
   };

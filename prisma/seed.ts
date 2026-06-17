@@ -4,7 +4,6 @@ import {
   calculateDebtInterest,
   calculateExpenseDifference,
   calculateExpenseStatus,
-  estimateMonthlyIncome,
   expectedIncomeByFortnight,
   expectedIncomeForPeriod,
   sum
@@ -194,6 +193,16 @@ async function main() {
     }
   });
 
+  const family = await prisma.user.upsert({
+    where: { email: "family@example.com" },
+    update: { name: "Ambos" },
+    create: {
+      name: "Ambos",
+      email: "family@example.com",
+      emailVerified: new Date()
+    }
+  });
+
   let workspace = await prisma.workspace.findFirst({
     where: {
       name: "Presupuesto Familiar",
@@ -210,12 +219,12 @@ async function main() {
       }
     }));
 
-  await prisma.workspaceMember.upsert({
+  const husbandMember = await prisma.workspaceMember.upsert({
     where: { workspaceId_userId: { workspaceId: workspace.id, userId: husband.id } },
     update: { role: "OWNER" },
     create: { workspaceId: workspace.id, userId: husband.id, role: "OWNER" }
   });
-  await prisma.workspaceMember.upsert({
+  const wifeMember = await prisma.workspaceMember.upsert({
     where: { workspaceId_userId: { workspaceId: workspace.id, userId: wife.id } },
     update: { role: "EDITOR" },
     create: { workspaceId: workspace.id, userId: wife.id, role: "EDITOR" }
@@ -225,6 +234,17 @@ async function main() {
     update: { role: "VIEWER" },
     create: { workspaceId: workspace.id, userId: viewer.id, role: "VIEWER" }
   });
+  const familyMember = await prisma.workspaceMember.upsert({
+    where: { workspaceId_userId: { workspaceId: workspace.id, userId: family.id } },
+    update: { role: "EDITOR" },
+    create: { workspaceId: workspace.id, userId: family.id, role: "EDITOR" }
+  });
+
+  const responsibleMemberByName = new Map<string, string>([
+    ["Husband", husbandMember.id],
+    ["Wife", wifeMember.id],
+    ["Ambos", familyMember.id]
+  ]);
 
   const budget = await prisma.budget.upsert({
     where: {
@@ -250,6 +270,31 @@ async function main() {
       savingTargetPercent: 10,
       emergencyFundTarget: 250000,
       emergencyFundCurrent: 25000
+    }
+  });
+
+  const dopCurrency = await prisma.currency.upsert({
+    where: {
+      budgetId_code: {
+        budgetId: budget.id,
+        code: "DOP"
+      }
+    },
+    update: {
+      name: "Peso Dominicano",
+      symbol: "RD$",
+      defaultRateToDop: 1,
+      isBase: true,
+      isActive: true
+    },
+    create: {
+      budgetId: budget.id,
+      code: "DOP",
+      name: "Peso Dominicano",
+      symbol: "RD$",
+      defaultRateToDop: 1,
+      isBase: true,
+      isActive: true
     }
   });
 
@@ -304,7 +349,9 @@ async function main() {
     expenses: juneExpenses,
     savings: juneSavingGoals,
     categoryByName,
-    accountByName
+    accountByName,
+    currencyId: dopCurrency.id,
+    responsibleMemberByName
   });
 
   const mayExpenses: SeedExpense[] = juneExpenses.map((expense) => {
@@ -356,11 +403,14 @@ async function main() {
     expenses: mayExpenses,
     savings: maySavings,
     categoryByName,
-    accountByName
+    accountByName,
+    currencyId: dopCurrency.id,
+    responsibleMemberByName
   });
 
   for (const [name, entity, responsibleName, pendingBalance, monthlyPayment, annualInterestRate, remainingMonths, strategy] of debts) {
     const estimatedTotalInterest = calculateDebtInterest(pendingBalance, annualInterestRate, remainingMonths);
+    const responsibleMemberId = responsibleMemberByName.get(responsibleName);
     const debt = await prisma.debt.upsert({
       where: {
         budgetPeriodId_name_entity: {
@@ -371,6 +421,15 @@ async function main() {
       },
       update: {
         responsibleName,
+        responsibleMemberId,
+        currencyId: dopCurrency.id,
+        currencyCode: "DOP",
+        currencySymbol: "RD$",
+        pendingBalanceOriginal: pendingBalance,
+        monthlyPaymentOriginal: monthlyPayment,
+        exchangeRateToDop: 1,
+        pendingBalanceDop: pendingBalance,
+        monthlyPaymentDop: monthlyPayment,
         pendingBalance,
         monthlyPayment,
         annualInterestRate,
@@ -385,6 +444,15 @@ async function main() {
         name,
         entity,
         responsibleName,
+        responsibleMemberId,
+        currencyId: dopCurrency.id,
+        currencyCode: "DOP",
+        currencySymbol: "RD$",
+        pendingBalanceOriginal: pendingBalance,
+        monthlyPaymentOriginal: monthlyPayment,
+        exchangeRateToDop: 1,
+        pendingBalanceDop: pendingBalance,
+        monthlyPaymentDop: monthlyPayment,
         pendingBalance,
         monthlyPayment,
         annualInterestRate,
@@ -475,7 +543,7 @@ async function main() {
     workspace: workspace.name,
     budget: budget.name,
     periods: ["2026-06 ACTIVE", "2026-05 CLOSED"],
-    totalIncomeJune2026: sum(juneSummary.incomes.map((income) => estimateMonthlyIncome(income))),
+    totalIncomeJune2026: sum(juneSummary.incomes.map((income) => expectedIncomeForPeriod(income, 2026, 6))),
     totalIncomeReceivedJune2026: sum(juneSummary.incomeReceipts.map((receipt) => receipt.amount)),
     totalBudgetedExpensesJune2026: sum(juneSummary.expenses.map((expense) => expense.amountBudgetedMonthly)),
     totalActualExpensesJune2026: sum(juneSummary.expenses.map((expense) => expense.actualAmount)),
@@ -498,6 +566,8 @@ async function seedPeriod(input: {
   savings: SeedSavingGoal[];
   categoryByName: Map<string, string>;
   accountByName: Map<string, string>;
+  currencyId: string;
+  responsibleMemberByName: Map<string, string>;
 }) {
   for (const incomeInput of input.incomes) {
     const startDate = dateUtc(input.year, input.month, incomeInput.startDay ?? 1);
@@ -511,8 +581,8 @@ async function seedPeriod(input: {
       expectedPaymentDays,
       isActive: incomeInput.isActive ?? true
     };
-    const amountMonthly = estimateMonthlyIncome(incomeForCalculation);
     const fortnight = expectedIncomeByFortnight(incomeForCalculation, input.year, input.month);
+    const responsibleMemberId = input.responsibleMemberByName.get(incomeInput.responsibleName);
     const income = await prisma.income.upsert({
       where: {
         budgetPeriodId_responsibleName_source: {
@@ -522,6 +592,13 @@ async function seedPeriod(input: {
         }
       },
       update: {
+        responsibleMemberId,
+        currencyId: input.currencyId,
+        currencyCode: "DOP",
+        currencySymbol: "RD$",
+        amountOriginal: incomeInput.amount,
+        exchangeRateToDop: 1,
+        amountDop: incomeInput.amount,
         amount: incomeInput.amount,
         amountType: incomeInput.amountType,
         frequency: incomeInput.frequency,
@@ -529,7 +606,6 @@ async function seedPeriod(input: {
         endDate,
         customRule: incomeInput.customRule,
         expectedPaymentDays,
-        amountMonthly,
         amountQ1: fortnight.q1,
         amountQ2: fortnight.q2,
         notes: incomeInput.notes,
@@ -539,6 +615,13 @@ async function seedPeriod(input: {
       create: {
         budgetPeriodId: input.periodId,
         responsibleName: incomeInput.responsibleName,
+        responsibleMemberId,
+        currencyId: input.currencyId,
+        currencyCode: "DOP",
+        currencySymbol: "RD$",
+        amountOriginal: incomeInput.amount,
+        exchangeRateToDop: 1,
+        amountDop: incomeInput.amount,
         source: incomeInput.source,
         amount: incomeInput.amount,
         amountType: incomeInput.amountType,
@@ -547,7 +630,6 @@ async function seedPeriod(input: {
         endDate,
         customRule: incomeInput.customRule,
         expectedPaymentDays,
-        amountMonthly,
         amountQ1: fortnight.q1,
         amountQ2: fortnight.q2,
         notes: incomeInput.notes,
@@ -577,6 +659,13 @@ async function seedPeriod(input: {
           where: { id: existingReceipt.id },
           data: {
             amount: amountPerReceipt,
+            amountOriginal: amountPerReceipt,
+            amountDop: amountPerReceipt,
+            exchangeRateToDop: 1,
+            currencyId: input.currencyId,
+            currencyCode: "DOP",
+            currencySymbol: "RD$",
+            responsibleMemberId: income.responsibleMemberId,
             responsibleName: income.responsibleName,
             source: income.source,
             notes: "Seed ingreso esperado"
@@ -587,7 +676,14 @@ async function seedPeriod(input: {
           data: {
             budgetPeriodId: input.periodId,
             incomeId: income.id,
+            responsibleMemberId: income.responsibleMemberId,
             responsibleName: income.responsibleName,
+            currencyId: input.currencyId,
+            currencyCode: "DOP",
+            currencySymbol: "RD$",
+            amountOriginal: amountPerReceipt,
+            exchangeRateToDop: 1,
+            amountDop: amountPerReceipt,
             source: income.source,
             amount: amountPerReceipt,
             receivedDate,
@@ -625,6 +721,7 @@ async function seedPeriod(input: {
 
     const status = calculateExpenseStatus(actualAmount, amountBudgetedMonthly);
     const difference = calculateExpenseDifference(actualAmount, amountBudgetedMonthly);
+    const responsibleMemberId = input.responsibleMemberByName.get(responsibleName);
     const expense = await prisma.expense.upsert({
       where: {
         budgetPeriodId_name: {
@@ -634,7 +731,17 @@ async function seedPeriod(input: {
       },
       update: {
         responsibleName,
+        responsibleMemberId,
         categoryId,
+        currencyId: input.currencyId,
+        currencyCode: "DOP",
+        currencySymbol: "RD$",
+        amountType: "FIXED",
+        amountBudgetedOriginal: amountBudgetedMonthly,
+        amountQ1Original: amountQ1,
+        amountQ2Original: amountQ2,
+        exchangeRateToDop: 1,
+        amountBudgetedDop: amountBudgetedMonthly,
         amountBudgetedMonthly,
         amountQ1,
         amountQ2,
@@ -651,7 +758,17 @@ async function seedPeriod(input: {
         budgetPeriodId: input.periodId,
         name,
         responsibleName,
+        responsibleMemberId,
         categoryId,
+        currencyId: input.currencyId,
+        currencyCode: "DOP",
+        currencySymbol: "RD$",
+        amountType: "FIXED",
+        amountBudgetedOriginal: amountBudgetedMonthly,
+        amountQ1Original: amountQ1,
+        amountQ2Original: amountQ2,
+        exchangeRateToDop: 1,
+        amountBudgetedDop: amountBudgetedMonthly,
         amountBudgetedMonthly,
         amountQ1,
         amountQ2,

@@ -35,7 +35,7 @@ export default async function DashboardPage({ params, searchParams }: PageProps)
   const breakdown = buildCategoryBreakdown(
     selectedPeriod?.expenses ?? [],
     budget.categories,
-    summary.totalIncomeMonthly,
+    summary.totalIncomeExpected,
     selectedPeriod?.expensePayments ?? []
   );
   const historyData = [...budget.periods]
@@ -78,9 +78,9 @@ export default async function DashboardPage({ params, searchParams }: PageProps)
         <MetricCard
           detail={`Real recibido: ${formatCurrency(summary.totalIncomeReceived)}`}
           icon={<Wallet className="h-4 w-4" />}
-          title="Ingresos estimados"
+          title="Ingresos esperados"
           tone="info"
-          value={formatCurrency(summary.totalIncomeMonthly)}
+          value={formatCurrency(summary.totalIncomeExpected)}
         />
         <MetricCard
           detail={`${formatPercent(summary.expensePercentOfIncome)} del ingreso`}

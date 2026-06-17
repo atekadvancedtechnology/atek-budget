@@ -22,7 +22,6 @@ import {
   calculateDebtInterest,
   calculateExpenseDifference,
   calculateExpenseStatus,
-  estimateMonthlyIncome,
   expectedIncomeByFortnight
 } from "@/lib/finance";
 import { getOrCreateBudgetPeriod as getOrCreateBudgetPeriodWithInheritance, type PeriodTarget } from "@/lib/periods";
@@ -194,10 +193,39 @@ async function resolveResponsibleMember(
     };
   }
 
+  const memberCount = await tx.workspaceMember.count({
+    where: {
+      workspace: {
+        budgets: {
+          some: {
+            id: budgetId
+          }
+        }
+      }
+    }
+  });
+
+  if (memberCount > 0) {
+    throw new Error("Selecciona un miembro existente como responsable.");
+  }
+
   return {
     responsibleMemberId: null,
     responsibleName
   };
+}
+
+function isRecurringIncomeInput(input: { amountType: string; frequency: string; isActive?: boolean }) {
+  return (
+    input.isActive !== false &&
+    input.amountType === "FIXED" &&
+    input.frequency !== "ONE_TIME" &&
+    input.frequency !== "IRREGULAR"
+  );
+}
+
+function isRecurringExpenseInput(input: { amountType?: string; isRecurring?: boolean }) {
+  return input.amountType === "FIXED" && input.isRecurring !== false;
 }
 
 async function ensureDopCurrency(tx: Tx, budgetId: string) {
@@ -453,6 +481,24 @@ export async function createIncomeAction(budgetId: string, periodTarget: PeriodT
     const responsible = await resolveResponsibleMember(tx, budgetId, data);
     const currency = await resolveCurrency(tx, budgetId, data);
     const amountDop = convertToDop(data.amount, currency.exchangeRateToDop);
+    const duplicate = await tx.income.findUnique({
+      where: {
+        budgetPeriodId_responsibleName_source: {
+          budgetPeriodId: period.id,
+          responsibleName: responsible.responsibleName,
+          source: data.source
+        }
+      }
+    });
+
+    if (duplicate) {
+      throw new Error(
+        isRecurringIncomeInput(data)
+          ? "Este ingreso recurrente ya existe en el periodo seleccionado."
+          : "Ya existe un ingreso con el mismo responsable y fuente en este periodo."
+      );
+    }
+
     const expectedPaymentDays = parsePaymentDays(data.expectedPaymentDays);
     const startDate = new Date(data.startDate);
     const endDate = data.endDate ? new Date(data.endDate) : null;
@@ -464,7 +510,6 @@ export async function createIncomeAction(budgetId: string, periodTarget: PeriodT
       expectedPaymentDays,
       isActive: data.isActive
     };
-    const amountMonthly = estimateMonthlyIncome(incomeForCalculation);
     const fortnight = expectedIncomeByFortnight(incomeForCalculation, period.year, period.month);
     const income = await tx.income.create({
       data: {
@@ -484,7 +529,6 @@ export async function createIncomeAction(budgetId: string, periodTarget: PeriodT
         endDate,
         customRule: data.customRule,
         expectedPaymentDays,
-        amountMonthly,
         amountQ1: fortnight.q1,
         amountQ2: fortnight.q2,
         notes: data.notes,
@@ -513,7 +557,7 @@ export async function createIncomeAction(budgetId: string, periodTarget: PeriodT
     });
   });
 
-  revalidatePath(`/app/budgets/${budgetId}`);
+  revalidateBudgetIncomePaths(budgetId);
 }
 
 export async function updateIncomeAction(budgetId: string, incomeId: string, raw: unknown) {
@@ -541,6 +585,25 @@ export async function updateIncomeAction(budgetId: string, incomeId: string, raw
     const responsible = await resolveResponsibleMember(tx, budgetId, data);
     const currency = await resolveCurrency(tx, budgetId, data);
     const amountDop = convertToDop(data.amount, currency.exchangeRateToDop);
+    const duplicate = await tx.income.findFirst({
+      where: {
+        budgetPeriodId: existing.budgetPeriodId,
+        responsibleName: responsible.responsibleName,
+        source: data.source,
+        NOT: {
+          id: existing.id
+        }
+      }
+    });
+
+    if (duplicate) {
+      throw new Error(
+        isRecurringIncomeInput(data)
+          ? "Este ingreso recurrente ya existe en el periodo seleccionado."
+          : "Ya existe un ingreso con el mismo responsable y fuente en este periodo."
+      );
+    }
+
     const startDate = new Date(data.startDate);
     const endDate = data.endDate ? new Date(data.endDate) : null;
     const incomeForCalculation = {
@@ -551,7 +614,6 @@ export async function updateIncomeAction(budgetId: string, incomeId: string, raw
       expectedPaymentDays,
       isActive: data.isActive
     };
-    const amountMonthly = estimateMonthlyIncome(incomeForCalculation);
     const fortnight = expectedIncomeByFortnight(incomeForCalculation, existing.budgetPeriod.year, existing.budgetPeriod.month);
     const income = await tx.income.update({
       where: {
@@ -574,7 +636,6 @@ export async function updateIncomeAction(budgetId: string, incomeId: string, raw
         endDate,
         customRule: data.customRule,
         expectedPaymentDays,
-        amountMonthly,
         amountQ1: fortnight.q1,
         amountQ2: fortnight.q2,
         notes: data.notes,
@@ -625,8 +686,7 @@ export async function updateIncomeAction(budgetId: string, incomeId: string, raw
     });
   });
 
-  revalidatePath(`/app/budgets/${budgetId}`);
-  revalidatePath(`/app/budgets/${budgetId}/income`);
+  revalidateBudgetIncomePaths(budgetId);
 }
 
 export async function deleteIncomeAction(budgetId: string, incomeId: string) {
@@ -667,8 +727,7 @@ export async function deleteIncomeAction(budgetId: string, incomeId: string) {
     });
   });
 
-  revalidatePath(`/app/budgets/${budgetId}`);
-  revalidatePath(`/app/budgets/${budgetId}/income`);
+  revalidateBudgetIncomePaths(budgetId);
 }
 
 export async function createIncomeReceiptAction(budgetId: string, periodTarget: PeriodTarget, raw: unknown) {
@@ -756,7 +815,7 @@ export async function createIncomeReceiptAction(budgetId: string, periodTarget: 
     });
   });
 
-  revalidatePath(`/app/budgets/${budgetId}`);
+  revalidateBudgetIncomePaths(budgetId);
 }
 
 export async function updateIncomeReceiptAction(budgetId: string, receiptId: string, raw: unknown) {
@@ -868,8 +927,7 @@ export async function updateIncomeReceiptAction(budgetId: string, receiptId: str
     });
   });
 
-  revalidatePath(`/app/budgets/${budgetId}`);
-  revalidatePath(`/app/budgets/${budgetId}/income`);
+  revalidateBudgetIncomePaths(budgetId);
 }
 
 export async function deleteIncomeReceiptAction(budgetId: string, receiptId: string) {
@@ -910,8 +968,15 @@ export async function deleteIncomeReceiptAction(budgetId: string, receiptId: str
     });
   });
 
+  revalidateBudgetIncomePaths(budgetId);
+}
+
+function revalidateBudgetIncomePaths(budgetId: string) {
   revalidatePath(`/app/budgets/${budgetId}`);
   revalidatePath(`/app/budgets/${budgetId}/income`);
+  revalidatePath(`/app/budgets/${budgetId}/dashboard`);
+  revalidatePath(`/app/budgets/${budgetId}/cashflow`);
+  revalidatePath(`/app/budgets/${budgetId}/history`);
 }
 
 function revalidateBudgetCategoryPaths(budgetId: string) {
@@ -1470,6 +1535,23 @@ export async function createExpenseAction(budgetId: string, periodTarget: Period
     const actualAmount = data.actualAmount == null ? 0 : convertToDop(data.actualAmount, currency.exchangeRateToDop);
     const status = calculateExpenseStatus(actualAmount, amountBudgetedDop);
     const difference = calculateExpenseDifference(actualAmount, amountBudgetedDop);
+    const duplicate = await tx.expense.findUnique({
+      where: {
+        budgetPeriodId_name: {
+          budgetPeriodId: period.id,
+          name: data.name
+        }
+      }
+    });
+
+    if (duplicate) {
+      throw new Error(
+        isRecurringExpenseInput(data)
+          ? "Este gasto recurrente ya existe en el periodo seleccionado."
+          : "Ya existe un gasto con ese nombre en este periodo."
+      );
+    }
+
     const expense = await tx.expense.create({
       data: {
         name: data.name,
@@ -1519,7 +1601,7 @@ export async function createExpenseAction(budgetId: string, periodTarget: Period
     });
   });
 
-  revalidatePath(`/app/budgets/${budgetId}`);
+  revalidateBudgetExpensePaths(budgetId);
 }
 
 export async function updateExpenseAction(budgetId: string, expenseId: string, raw: unknown) {
@@ -1561,6 +1643,23 @@ export async function updateExpenseAction(budgetId: string, expenseId: string, r
         : convertToDop(data.actualAmount, currency.exchangeRateToDop);
     const status = calculateExpenseStatus(actualAmount, amountBudgetedDop);
     const difference = calculateExpenseDifference(actualAmount, amountBudgetedDop);
+    const duplicate = await tx.expense.findFirst({
+      where: {
+        budgetPeriodId: existing.budgetPeriodId,
+        name: data.name,
+        NOT: {
+          id: existing.id
+        }
+      }
+    });
+
+    if (duplicate) {
+      throw new Error(
+        isRecurringExpenseInput(data)
+          ? "Este gasto recurrente ya existe en el periodo seleccionado."
+          : "Ya existe un gasto con ese nombre en este periodo."
+      );
+    }
 
     const expense = await tx.expense.update({
       where: {
@@ -2025,6 +2124,20 @@ export async function createDebtAction(budgetId: string, periodTarget: PeriodTar
       data.annualInterestRate,
       data.remainingMonths
     );
+    const duplicate = await tx.debt.findUnique({
+      where: {
+        budgetPeriodId_name_entity: {
+          budgetPeriodId: period.id,
+          name: data.name,
+          entity: data.entity
+        }
+      }
+    });
+
+    if (duplicate) {
+      throw new Error("Esta deuda ya existe en el periodo seleccionado.");
+    }
+
     const estimatedCloseDate = periodStartDate(period);
     estimatedCloseDate.setUTCMonth(estimatedCloseDate.getUTCMonth() + data.remainingMonths);
     const debt = await tx.debt.create({
@@ -2073,7 +2186,7 @@ export async function createDebtAction(budgetId: string, periodTarget: PeriodTar
     });
   });
 
-  revalidatePath(`/app/budgets/${budgetId}`);
+  revalidateBudgetDebtPaths(budgetId);
 }
 
 export async function updateDebtAction(budgetId: string, debtId: string, raw: unknown) {
@@ -2106,6 +2219,21 @@ export async function updateDebtAction(budgetId: string, debtId: string, raw: un
       data.annualInterestRate,
       data.remainingMonths
     );
+    const duplicate = await tx.debt.findFirst({
+      where: {
+        budgetPeriodId: existing.budgetPeriodId,
+        name: data.name,
+        entity: data.entity,
+        NOT: {
+          id: existing.id
+        }
+      }
+    });
+
+    if (duplicate) {
+      throw new Error("Esta deuda ya existe en el periodo seleccionado.");
+    }
+
     const estimatedCloseDate = periodStartDate(existing.budgetPeriod);
     estimatedCloseDate.setUTCMonth(estimatedCloseDate.getUTCMonth() + data.remainingMonths);
     const debt = await tx.debt.update({
@@ -2162,8 +2290,7 @@ export async function updateDebtAction(budgetId: string, debtId: string, raw: un
     });
   });
 
-  revalidatePath(`/app/budgets/${budgetId}`);
-  revalidatePath(`/app/budgets/${budgetId}/debts`);
+  revalidateBudgetDebtPaths(budgetId);
 }
 
 export async function deleteDebtAction(budgetId: string, debtId: string) {
@@ -2204,8 +2331,7 @@ export async function deleteDebtAction(budgetId: string, debtId: string) {
     });
   });
 
-  revalidatePath(`/app/budgets/${budgetId}`);
-  revalidatePath(`/app/budgets/${budgetId}/debts`);
+  revalidateBudgetDebtPaths(budgetId);
 }
 
 export async function markDebtPaidAction(budgetId: string, debtId: string) {
@@ -2247,9 +2373,7 @@ export async function markDebtPaidAction(budgetId: string, debtId: string) {
     });
   });
 
-  revalidatePath(`/app/budgets/${budgetId}`);
-  revalidatePath(`/app/budgets/${budgetId}/dashboard`);
-  revalidatePath(`/app/budgets/${budgetId}/debts`);
+  revalidateBudgetDebtPaths(budgetId);
 }
 
 export async function reopenDebtAction(budgetId: string, debtId: string) {
@@ -2298,9 +2422,15 @@ export async function reopenDebtAction(budgetId: string, debtId: string) {
     });
   });
 
+  revalidateBudgetDebtPaths(budgetId);
+}
+
+function revalidateBudgetDebtPaths(budgetId: string) {
   revalidatePath(`/app/budgets/${budgetId}`);
-  revalidatePath(`/app/budgets/${budgetId}/dashboard`);
   revalidatePath(`/app/budgets/${budgetId}/debts`);
+  revalidatePath(`/app/budgets/${budgetId}/dashboard`);
+  revalidatePath(`/app/budgets/${budgetId}/cashflow`);
+  revalidatePath(`/app/budgets/${budgetId}/history`);
 }
 
 export async function createSavingGoalAction(budgetId: string, periodTarget: PeriodTarget, raw: unknown) {

@@ -15,7 +15,7 @@ export const incomeSchema = z.object({
   currencyId: z.string().optional(),
   exchangeRateToDop: exchangeRate.default(1),
   source: z.string().min(1, "La fuente es obligatoria."),
-  amount: money,
+  amount: positiveMoney,
   amountType: z.enum(["FIXED", "VARIABLE", "ESTIMATED"]),
   frequency: z.enum([
     "ONE_TIME",
@@ -45,7 +45,7 @@ export const incomeReceiptSchema = z.object({
   currencyId: z.string().optional(),
   exchangeRateToDop: exchangeRate.default(1),
   source: z.string().min(1, "La fuente es obligatoria."),
-  amount: money,
+  amount: positiveMoney,
   receivedDate: z.string().min(1, "La fecha recibida es obligatoria."),
   notes: z.string().optional()
 });
@@ -58,7 +58,7 @@ export const expenseSchema = z.object({
   currencyId: z.string().optional(),
   exchangeRateToDop: exchangeRate.default(1),
   amountType: z.enum(["FIXED", "VARIABLE", "ESTIMATED"]).default("FIXED"),
-  amountBudgetedMonthly: money,
+  amountBudgetedMonthly: positiveMoney,
   amountQ1: money,
   amountQ2: money,
   bankAccountId: z.string().optional(),
@@ -119,8 +119,8 @@ export const debtSchema = z.object({
   responsibleName: z.string().min(1, "El responsable es obligatorio."),
   currencyId: z.string().optional(),
   exchangeRateToDop: exchangeRate.default(1),
-  pendingBalance: money,
-  monthlyPayment: money,
+  pendingBalance: positiveMoney,
+  monthlyPayment: positiveMoney,
   annualInterestRate: money,
   remainingMonths: z.coerce.number().int().min(0),
   strategy: z.enum(["AVALANCHE", "SNOWBALL", "CUSTOM"]),

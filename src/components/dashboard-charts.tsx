@@ -99,7 +99,17 @@ export function DashboardCharts({
 export function CashflowChart({
   data
 }: {
-  data: { name: string; ingresoQ1: number; gastoQ1: number; restoQ1: number; ingresoQ2: number; gastoQ2: number; restoQ2: number }[];
+  data: {
+    name: string;
+    ingresoQ1: number;
+    gastoQ1: number;
+    deudaQ1: number;
+    restoQ1: number;
+    ingresoQ2: number;
+    gastoQ2: number;
+    deudaQ2: number;
+    restoQ2: number;
+  }[];
 }) {
   return (
     <Card>
@@ -117,9 +127,11 @@ export function CashflowChart({
             <Legend />
             <Bar dataKey="ingresoQ1" fill="#2563eb" name="Ingreso Q1" radius={[4, 4, 0, 0]} />
             <Bar dataKey="gastoQ1" fill="#dc2626" name="Gasto Q1" radius={[4, 4, 0, 0]} />
+            <Bar dataKey="deudaQ1" fill="#f97316" name="Deuda Q1" radius={[4, 4, 0, 0]} />
             <Bar dataKey="restoQ1" fill="#0f766e" name="Resto Q1" radius={[4, 4, 0, 0]} />
             <Bar dataKey="ingresoQ2" fill="#7c3aed" name="Ingreso Q2" radius={[4, 4, 0, 0]} />
             <Bar dataKey="gastoQ2" fill="#d97706" name="Gasto Q2" radius={[4, 4, 0, 0]} />
+            <Bar dataKey="deudaQ2" fill="#be123c" name="Deuda Q2" radius={[4, 4, 0, 0]} />
             <Bar dataKey="restoQ2" fill="#0891b2" name="Resto Q2" radius={[4, 4, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>

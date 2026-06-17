@@ -11,7 +11,6 @@ import { emptyPeriodInput, getBudgetWorkspaceDataForPeriod, periodHref } from "@
 import {
   buildBudgetSummary,
   estimateAnnualIncome,
-  estimateMonthlyIncome,
   expectedIncomeForPeriod,
   receivedIncomeForIncome,
   safePercent
@@ -118,8 +117,7 @@ export default async function IncomePage({ params, searchParams }: PageProps) {
         year={selection.year}
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <MetricCard title="Mensual estimado" tone="info" value={formatCurrency(summary.totalIncomeMonthly)} />
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard title="Anual estimado" value={formatCurrency(summary.totalIncomeAnnualEstimated)} />
         <MetricCard title="Esperado del mes" value={formatCurrency(summary.totalIncomeExpected)} />
         <MetricCard title="Real recibido" tone="success" value={formatCurrency(summary.totalIncomeReceived)} />
@@ -208,7 +206,6 @@ export default async function IncomePage({ params, searchParams }: PageProps) {
               <TableHead>Frecuencia</TableHead>
               <TableHead>Inicio</TableHead>
               <TableHead>Días pago</TableHead>
-              <TableHead>Mensual est.</TableHead>
               <TableHead>Esperado mes</TableHead>
               <TableHead>Recibido</TableHead>
               <TableHead>Diferencia</TableHead>
@@ -220,7 +217,6 @@ export default async function IncomePage({ params, searchParams }: PageProps) {
           </TableHeader>
           <TableBody>
             {selectedPeriod?.incomes.map((income) => {
-              const monthlyEstimate = estimateMonthlyIncome(income);
               const expectedMonth = expectedIncomeForPeriod(income, selection.year, selection.month);
               const received = receivedIncomeForIncome(income);
               return (
@@ -233,11 +229,10 @@ export default async function IncomePage({ params, searchParams }: PageProps) {
                   <TableCell data-label="Frecuencia">{frequencyLabels[income.frequency]}</TableCell>
                   <TableCell data-label="Inicio">{formatDate(income.startDate)}</TableCell>
                   <TableCell data-label="Días pago">{income.expectedPaymentDays.length > 0 ? income.expectedPaymentDays.join(", ") : "Flexible"}</TableCell>
-                  <TableCell data-label="Mensual est.">{formatCurrency(monthlyEstimate)}</TableCell>
                   <TableCell data-label="Esperado mes">{formatCurrency(expectedMonth)}</TableCell>
                   <TableCell data-label="Recibido">{formatCurrency(received)}</TableCell>
                   <TableCell data-label="Diferencia">{formatCurrency(received - expectedMonth)}</TableCell>
-                  <TableCell data-label="% familiar">{formatPercent(safePercent(monthlyEstimate, summary.totalIncomeMonthly))}</TableCell>
+                  <TableCell data-label="% familiar">{formatPercent(safePercent(expectedMonth, summary.totalIncomeExpected))}</TableCell>
                   <TableCell data-label="Anual estimado">{formatCurrency(estimateAnnualIncome(income))}</TableCell>
                   <TableCell data-label="Estado">
                     <Badge tone={income.isActive ? "success" : "neutral"}>{income.isActive ? "Activo" : "Inactivo"}</Badge>

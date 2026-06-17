@@ -254,7 +254,6 @@ model Income {
   endDate             DateTime?
   customRule          String?
   expectedPaymentDays Int[]            @default([])
-  amountMonthly       Decimal          @db.Decimal(12, 2)
   amountQ1            Decimal          @db.Decimal(12, 2)
   amountQ2            Decimal          @db.Decimal(12, 2)
   source              String

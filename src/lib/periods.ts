@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 
-import { calculateDebtInterest, estimateMonthlyIncome, expectedIncomeByFortnight } from "@/lib/finance";
+import { calculateDebtInterest, expectedIncomeByFortnight } from "@/lib/finance";
 import { prisma } from "@/lib/prisma";
 
 export type PeriodTarget = {
@@ -129,7 +129,6 @@ export async function getOrCreateBudgetPeriod(
       endDate: income.endDate,
       customRule: income.customRule,
       expectedPaymentDays: income.expectedPaymentDays,
-      amountMonthly: estimateMonthlyIncome(calculationInput),
       amountQ1: fortnight.q1,
       amountQ2: fortnight.q2,
       source: income.source,
