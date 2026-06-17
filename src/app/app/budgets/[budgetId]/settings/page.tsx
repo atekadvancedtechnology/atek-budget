@@ -55,7 +55,7 @@ export default async function SettingsPage({ params }: PageProps) {
             name: category.name,
             icon: category.icon ?? "",
             recommendedMaxPercent: Number(category.recommendedMaxPercent),
-            expensesCount: category._count.expenses
+            expensesCount: category._count.expenses + category._count.expensePayments
           }))}
         />
 

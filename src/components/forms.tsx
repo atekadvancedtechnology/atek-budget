@@ -19,12 +19,14 @@ import {
   createBudgetAction,
   createDebtAction,
   createExpenseAction,
+  createExpensePaymentAction,
   createIncomeAction,
   createIncomeReceiptAction,
   createSavingGoalAction,
   inviteMemberAction,
   updateDebtAction,
   updateExpenseAction,
+  updateExpensePaymentAction,
   updateIncomeAction,
   updateIncomeReceiptAction,
   updateSavingGoalAction
@@ -32,6 +34,7 @@ import {
 import {
   createBudgetSchema,
   debtSchema,
+  expensePaymentSchema,
   expenseSchema,
   incomeReceiptSchema,
   incomeSchema,
@@ -120,6 +123,7 @@ const frequencyOptions = [
 type IncomeFormValues = z.infer<typeof incomeSchema>;
 type IncomeReceiptFormValues = z.infer<typeof incomeReceiptSchema>;
 type ExpenseFormValues = z.infer<typeof expenseSchema>;
+type ExpensePaymentFormValues = z.infer<typeof expensePaymentSchema>;
 type DebtFormValues = z.infer<typeof debtSchema>;
 type SavingGoalFormValues = z.infer<typeof savingGoalSchema>;
 
@@ -449,15 +453,13 @@ export function ExpenseForm({
       amountQ1: 0,
       amountQ2: 0,
       bankAccountId: "",
-      actualAmount: 0,
-      expenseDate: defaultDateForPeriod(periodYear, periodMonth),
       isRecurring: true,
       notes: ""
     }
   });
 
   return (
-    <RecordFormShell title={isEditing ? "Editar gasto" : "Nuevo gasto"} description="Presupuesto y monto real se validan desde servidor." disabled={disabled}>
+    <RecordFormShell title={isEditing ? "Editar gasto planificado" : "Nuevo gasto planificado"} description="Define el presupuesto mensual. Los pagos reales se registran por separado." disabled={disabled}>
       <form
         key={formVersion}
         className="grid gap-4 md:grid-cols-4"
@@ -489,8 +491,6 @@ export function ExpenseForm({
         <MoneyInput label="Presupuesto" name="amountBudgetedMonthly" form={form} disabled={disabled} />
         <MoneyInput label="Quincena 1" name="amountQ1" form={form} disabled={disabled} />
         <MoneyInput label="Quincena 2" name="amountQ2" form={form} disabled={disabled} />
-        <MoneyInput label="Real" name="actualAmount" form={form} disabled={disabled} />
-        <TextInput label="Fecha" name="expenseDate" form={form} disabled={disabled} type="date" />
         <div className="flex items-center gap-2 pt-7">
           <input
             className="h-4 w-4 rounded border-input"
@@ -501,6 +501,142 @@ export function ExpenseForm({
           />
           <Label htmlFor="isRecurring">Recurrente</Label>
         </div>
+        <TextInput label="Notas" name="notes" form={form} disabled={disabled} />
+        <FormFooter
+          cancelHref={isEditing ? returnPath : undefined}
+          isPending={isPending}
+          disabled={disabled}
+          error={error}
+          success={success}
+          className="md:col-span-4"
+        />
+      </form>
+    </RecordFormShell>
+  );
+}
+
+export function ExpensePaymentForm({
+  accounts,
+  budgetId,
+  categories,
+  disabled,
+  expenses,
+  initialValues,
+  periodMonth,
+  periodYear,
+  recordId,
+  returnPath
+}: {
+  accounts: { id: string; name: string }[];
+  budgetId: string;
+  categories: { id: string; name: string }[];
+  disabled: boolean;
+  expenses: {
+    id: string;
+    name: string;
+    responsibleName: string;
+    categoryId: string;
+    bankAccountId: string | null;
+  }[];
+  initialValues?: ExpensePaymentFormValues;
+  periodMonth: number;
+  periodYear: number;
+  recordId?: string;
+  returnPath?: string;
+}) {
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
+  const [error, setError] = useState<string>();
+  const [success, setSuccess] = useState<string>();
+  const [formVersion, setFormVersion] = useState(0);
+  const isEditing = Boolean(recordId);
+  const accountOptions = [{ id: "", name: "Sin cuenta" }, ...accounts];
+  const [selectedExpenseId, setSelectedExpenseId] = useState(initialValues?.expenseId ?? "");
+  const form = useForm<ExpensePaymentFormValues>({
+    resolver: zodResolver(expensePaymentSchema),
+    defaultValues: initialValues ?? {
+      expenseId: "",
+      name: "",
+      responsibleName: "",
+      categoryId: categories[0]?.id ?? "",
+      bankAccountId: "",
+      amount: 0,
+      paidDate: defaultDateForPeriod(periodYear, periodMonth),
+      notes: ""
+    }
+  });
+
+  return (
+    <RecordFormShell
+      title={isEditing ? "Editar pago real" : "Pago real de gasto"}
+      description="Registra cada pago real sin duplicar el presupuesto mensual."
+      disabled={disabled}
+    >
+      <form
+        key={formVersion}
+        className="grid gap-4 md:grid-cols-4"
+        onSubmit={form.handleSubmit((values) => {
+          setError(undefined);
+          setSuccess(undefined);
+          startTransition(async () => {
+            try {
+              if (isEditing && recordId) {
+                await updateExpensePaymentAction(budgetId, recordId, values);
+                setSuccess("Pago actualizado.");
+                if (returnPath) router.push(returnPath);
+              } else {
+                await createExpensePaymentAction(budgetId, { year: periodYear, month: periodMonth }, values);
+                form.reset();
+                setSelectedExpenseId("");
+                setFormVersion((version) => version + 1);
+                setSuccess("Pago guardado.");
+              }
+            } catch (actionError) {
+              setError(getErrorMessage(actionError));
+            }
+          });
+        })}
+      >
+        <div className="space-y-2">
+          <Label htmlFor="expensePaymentExpenseId">Gasto planificado</Label>
+          <Select
+            disabled={disabled}
+            id="expensePaymentExpenseId"
+            value={selectedExpenseId}
+            onChange={(event) => {
+              const value = event.target.value;
+              setSelectedExpenseId(value);
+              form.setValue("expenseId", value, { shouldDirty: true, shouldValidate: true });
+              const selectedExpense = expenses.find((expense) => expense.id === value);
+              if (selectedExpense) {
+                form.setValue("name", selectedExpense.name, { shouldDirty: true, shouldValidate: true });
+                form.setValue("responsibleName", selectedExpense.responsibleName, {
+                  shouldDirty: true,
+                  shouldValidate: true
+                });
+                form.setValue("categoryId", selectedExpense.categoryId, { shouldDirty: true, shouldValidate: true });
+                form.setValue("bankAccountId", selectedExpense.bankAccountId ?? "", {
+                  shouldDirty: true,
+                  shouldValidate: true
+                });
+              }
+            }}
+          >
+            <option value="">No asociado / gasto adicional</option>
+            {expenses.map((expense) => (
+              <option key={expense.id} value={expense.id}>
+                {expense.responsibleName} - {expense.name}
+              </option>
+            ))}
+          </Select>
+          <FieldError message={form.formState.errors.expenseId?.message?.toString()} />
+        </div>
+        <TextInput label="Gasto" name="name" form={form} disabled={disabled} />
+        <TextInput label="Responsable" name="responsibleName" form={form} disabled={disabled} />
+        <SelectField label="Categoría" name="categoryId" form={form} disabled={disabled} options={categories} />
+        <SelectField label="Cuenta" name="bankAccountId" form={form} disabled={disabled} options={accountOptions} />
+        <MoneyInput label="Monto pagado" name="amount" form={form} disabled={disabled} />
+        <TextInput label="Fecha pagada" name="paidDate" form={form} disabled={disabled} type="date" />
         <TextInput label="Notas" name="notes" form={form} disabled={disabled} />
         <FormFooter
           cancelHref={isEditing ? returnPath : undefined}

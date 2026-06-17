@@ -83,6 +83,7 @@ model User {
   incomeReceiptsCreated      IncomeReceipt[]      @relation("IncomeReceiptCreatedBy")
   expensesCreated            Expense[]            @relation("ExpenseCreatedBy")
   expensesUpdated            Expense[]            @relation("ExpenseUpdatedBy")
+  expensePaymentsCreated     ExpensePayment[]     @relation("ExpensePaymentCreatedBy")
   debtsCreated               Debt[]               @relation("DebtCreatedBy")
   debtsUpdated               Debt[]               @relation("DebtUpdatedBy")
   savingGoalsCreated         SavingGoal[]         @relation("SavingGoalCreatedBy")
@@ -193,6 +194,7 @@ model BudgetPeriod {
   incomes        Income[]
   incomeReceipts IncomeReceipt[]
   expenses       Expense[]
+  expensePayments ExpensePayment[]
   debts          Debt[]
   savingGoals    SavingGoal[]
 
@@ -266,8 +268,9 @@ model ExpenseCategory {
   recommendedMaxPercent Decimal @db.Decimal(5, 2)
   isDefault             Boolean @default(false)
 
-  budget   Budget    @relation(fields: [budgetId], references: [id], onDelete: Cascade)
-  expenses Expense[]
+  budget          Budget           @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  expenses        Expense[]
+  expensePayments ExpensePayment[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -283,8 +286,9 @@ model BankAccount {
   type        String
   notes       String?
 
-  budget   Budget    @relation(fields: [budgetId], references: [id], onDelete: Cascade)
-  expenses Expense[]
+  budget          Budget           @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  expenses        Expense[]
+  expensePayments ExpensePayment[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -315,6 +319,7 @@ model Expense {
   budgetPeriod BudgetPeriod    @relation(fields: [budgetPeriodId], references: [id], onDelete: Cascade)
   category     ExpenseCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   bankAccount  BankAccount?    @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
+  payments     ExpensePayment[]
   createdBy    User?           @relation("ExpenseCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedBy    User?           @relation("ExpenseUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 
@@ -324,6 +329,35 @@ model Expense {
   @@unique([budgetPeriodId, name])
   @@index([categoryId])
   @@index([bankAccountId])
+}
+
+model ExpensePayment {
+  id              String   @id @default(cuid())
+  budgetPeriodId  String
+  expenseId       String?
+  name            String
+  responsibleName String
+  categoryId      String
+  bankAccountId   String?
+  amount          Decimal  @db.Decimal(12, 2)
+  paidDate        DateTime
+  notes           String?
+  createdById     String?
+
+  budgetPeriod BudgetPeriod    @relation(fields: [budgetPeriodId], references: [id], onDelete: Cascade)
+  expense      Expense?        @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+  category     ExpenseCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  bankAccount  BankAccount?    @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
+  createdBy    User?           @relation("ExpensePaymentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([budgetPeriodId, paidDate])
+  @@index([expenseId])
+  @@index([categoryId])
+  @@index([bankAccountId])
+  @@index([createdById])
 }
 
 model Debt {

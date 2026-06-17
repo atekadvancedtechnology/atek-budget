@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const money = z.coerce.number().min(0, "El monto no puede ser negativo.");
+const positiveMoney = z.coerce.number().positive("El monto debe ser mayor que cero.");
 
 export const createBudgetSchema = z.object({
   workspaceName: z.string().min(2, "El nombre del hogar es obligatorio."),
@@ -53,6 +54,17 @@ export const expenseSchema = z.object({
   actualAmount: money.optional(),
   expenseDate: z.string().optional(),
   isRecurring: z.coerce.boolean().default(true),
+  notes: z.string().optional()
+});
+
+export const expensePaymentSchema = z.object({
+  expenseId: z.string().optional(),
+  name: z.string().min(1, "El nombre del gasto es obligatorio."),
+  responsibleName: z.string().min(1, "El responsable es obligatorio."),
+  categoryId: z.string().min(1, "La categoría es obligatoria."),
+  bankAccountId: z.string().optional(),
+  amount: positiveMoney,
+  paidDate: z.string().min(1, "La fecha de pago es obligatoria."),
   notes: z.string().optional()
 });
 

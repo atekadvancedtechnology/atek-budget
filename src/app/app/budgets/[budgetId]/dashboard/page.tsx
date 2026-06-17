@@ -32,7 +32,12 @@ export default async function DashboardPage({ params, searchParams }: PageProps)
   const previousPeriod = selectPreviousPeriod(budget.periods, selectedPeriod ?? { id: "selected", year: selection.year, month: selection.month });
   const summary = buildBudgetSummary(periodForSummary);
   const previousSummary = previousPeriod ? buildBudgetSummary(previousPeriod) : undefined;
-  const breakdown = buildCategoryBreakdown(selectedPeriod?.expenses ?? [], budget.categories, summary.totalIncomeMonthly);
+  const breakdown = buildCategoryBreakdown(
+    selectedPeriod?.expenses ?? [],
+    budget.categories,
+    summary.totalIncomeMonthly,
+    selectedPeriod?.expensePayments ?? []
+  );
   const historyData = [...budget.periods]
     .sort((a, b) => a.year - b.year || a.month - b.month)
     .map((period) => {

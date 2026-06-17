@@ -57,7 +57,8 @@ export async function getBudgetWorkspaceData(budgetId: string) {
         include: {
           _count: {
             select: {
-              expenses: true
+              expenses: true,
+              expensePayments: true
             }
           }
         },
@@ -96,10 +97,25 @@ export async function getBudgetWorkspaceData(budgetId: string) {
           expenses: {
             include: {
               category: true,
-              bankAccount: true
+              bankAccount: true,
+              payments: {
+                orderBy: {
+                  paidDate: "desc"
+                }
+              }
             },
             orderBy: {
               name: "asc"
+            }
+          },
+          expensePayments: {
+            include: {
+              expense: true,
+              category: true,
+              bankAccount: true
+            },
+            orderBy: {
+              paidDate: "desc"
             }
           },
           debts: {
@@ -197,6 +213,7 @@ export function emptyPeriodInput(year: number, month: number) {
     incomes: [],
     incomeReceipts: [],
     expenses: [],
+    expensePayments: [],
     debts: [],
     savingGoals: []
   };

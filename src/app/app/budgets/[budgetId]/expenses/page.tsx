@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 
-import { ExpenseForm } from "@/components/forms";
+import { ExpenseForm, ExpensePaymentForm } from "@/components/forms";
 import { MetricCard } from "@/components/metric-card";
 import { PeriodSelector } from "@/components/period-selector";
 import { RecordActions } from "@/components/record-actions";
@@ -8,13 +8,14 @@ import { StatusBadge } from "@/components/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { requireBudgetAccess } from "@/lib/authorization";
 import { emptyPeriodInput, getBudgetWorkspaceDataForPeriod, periodHref } from "@/lib/data";
-import { buildBudgetSummary } from "@/lib/finance";
+import { actualExpenseAmount, buildBudgetSummary, calculateExpenseDifference, calculateExpenseStatus } from "@/lib/finance";
 import { formatCurrency, periodLabel } from "@/lib/format";
 
 type PageProps = {
   params: Promise<{ budgetId: string }>;
   searchParams?: Promise<{
     editExpense?: string;
+    editPayment?: string;
     month?: string;
     year?: string;
   }>;
@@ -23,6 +24,16 @@ type PageProps = {
 function formatDateInput(value: Date | string | null | undefined) {
   if (!value) return "";
   return new Date(value).toISOString().slice(0, 10);
+}
+
+function formatDate(value: Date | string | null | undefined) {
+  if (!value) return "Sin fecha";
+  return new Intl.DateTimeFormat("es-DO", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC"
+  }).format(new Date(value));
 }
 
 export default async function ExpensesPage({ params, searchParams }: PageProps) {
@@ -36,6 +47,7 @@ export default async function ExpensesPage({ params, searchParams }: PageProps) 
   const summary = buildBudgetSummary(selectedPeriod ?? emptyPeriodInput(selection.year, selection.month));
   const returnPath = periodHref(basePath, selection.year, selection.month);
   const editExpense = selectedPeriod?.expenses.find((expense) => expense.id === query?.editExpense);
+  const editPayment = selectedPeriod?.expensePayments.find((payment) => payment.id === query?.editPayment);
 
   return (
     <div className="space-y-6">
@@ -84,8 +96,6 @@ export default async function ExpensesPage({ params, searchParams }: PageProps) 
                 amountQ1: Number(editExpense.amountQ1),
                 amountQ2: Number(editExpense.amountQ2),
                 bankAccountId: editExpense.bankAccountId ?? "",
-                actualAmount: Number(editExpense.actualAmount),
-                expenseDate: formatDateInput(editExpense.expenseDate),
                 isRecurring: editExpense.isRecurring,
                 notes: editExpense.notes ?? ""
               }
@@ -94,6 +104,38 @@ export default async function ExpensesPage({ params, searchParams }: PageProps) 
         periodMonth={selection.month}
         periodYear={selection.year}
         recordId={editExpense?.id}
+        returnPath={returnPath}
+      />
+      <ExpensePaymentForm
+        key={`${editPayment?.id ?? "new-expense-payment"}-${selection.year}-${selection.month}`}
+        accounts={budget.bankAccounts.map((account) => ({ id: account.id, name: account.name }))}
+        budgetId={budgetId}
+        categories={budget.categories.map((category) => ({ id: category.id, name: category.name }))}
+        disabled={!access.canEdit}
+        expenses={selectedPeriod?.expenses.map((expense) => ({
+          id: expense.id,
+          name: expense.name,
+          responsibleName: expense.responsibleName,
+          categoryId: expense.categoryId,
+          bankAccountId: expense.bankAccountId
+        })) ?? []}
+        initialValues={
+          editPayment
+            ? {
+                expenseId: editPayment.expenseId ?? "",
+                name: editPayment.expense?.name ?? editPayment.name,
+                responsibleName: editPayment.expense?.responsibleName ?? editPayment.responsibleName,
+                categoryId: editPayment.expense?.categoryId ?? editPayment.categoryId,
+                bankAccountId: editPayment.expense?.bankAccountId ?? editPayment.bankAccountId ?? "",
+                amount: Number(editPayment.amount),
+                paidDate: formatDateInput(editPayment.paidDate),
+                notes: editPayment.notes ?? ""
+              }
+            : undefined
+        }
+        periodMonth={selection.month}
+        periodYear={selection.year}
+        recordId={editPayment?.id}
         returnPath={returnPath}
       />
 
@@ -113,17 +155,22 @@ export default async function ExpensesPage({ params, searchParams }: PageProps) 
             </TableRow>
           </TableHeader>
           <TableBody>
-            {selectedPeriod?.expenses.map((expense) => (
+            {selectedPeriod?.expenses.map((expense) => {
+              const actualAmount = actualExpenseAmount(expense);
+              const difference = calculateExpenseDifference(actualAmount, expense.amountBudgetedMonthly);
+              const status = calculateExpenseStatus(actualAmount, expense.amountBudgetedMonthly);
+
+              return (
               <TableRow key={expense.id}>
                 <TableCell className="font-medium" data-label="Gasto">{expense.name}</TableCell>
                 <TableCell data-label="Responsable">{expense.responsibleName}</TableCell>
                 <TableCell data-label="Categoría">{expense.category.name}</TableCell>
                 <TableCell data-label="Cuenta">{expense.bankAccount?.name ?? "Sin cuenta"}</TableCell>
                 <TableCell data-label="Presupuesto">{formatCurrency(expense.amountBudgetedMonthly)}</TableCell>
-                <TableCell data-label="Real">{formatCurrency(expense.actualAmount)}</TableCell>
-                <TableCell data-label="Diferencia">{formatCurrency(expense.difference)}</TableCell>
+                <TableCell data-label="Real">{formatCurrency(actualAmount)}</TableCell>
+                <TableCell data-label="Diferencia">{formatCurrency(difference)}</TableCell>
                 <TableCell data-label="Estado">
-                  <StatusBadge status={expense.status} />
+                  <StatusBadge status={status} />
                 </TableCell>
                 <TableCell className="text-right" data-label="">
                   {access.canEdit ? (
@@ -132,6 +179,47 @@ export default async function ExpensesPage({ params, searchParams }: PageProps) 
                       editHref={periodHref(basePath, selection.year, selection.month, { editExpense: expense.id })}
                       entity="expense"
                       recordId={expense.id}
+                    />
+                  ) : null}
+                </TableCell>
+              </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+
+      <div className="overflow-x-auto rounded-lg border bg-card table-scroll responsive-records">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Fecha</TableHead>
+              <TableHead>Gasto</TableHead>
+              <TableHead>Responsable</TableHead>
+              <TableHead>CategorÃ­a</TableHead>
+              <TableHead>Cuenta</TableHead>
+              <TableHead>Monto pagado</TableHead>
+              <TableHead>Notas</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {selectedPeriod?.expensePayments.map((payment) => (
+              <TableRow key={payment.id}>
+                <TableCell data-label="Fecha">{formatDate(payment.paidDate)}</TableCell>
+                <TableCell className="font-medium" data-label="Gasto">{payment.expense?.name ?? payment.name}</TableCell>
+                <TableCell data-label="Responsable">{payment.expense?.responsibleName ?? payment.responsibleName}</TableCell>
+                <TableCell data-label="CategorÃ­a">{payment.category.name}</TableCell>
+                <TableCell data-label="Cuenta">{payment.bankAccount?.name ?? "Sin cuenta"}</TableCell>
+                <TableCell data-label="Monto pagado">{formatCurrency(payment.amount)}</TableCell>
+                <TableCell data-label="Notas">{payment.notes ?? ""}</TableCell>
+                <TableCell className="text-right" data-label="">
+                  {access.canEdit ? (
+                    <RecordActions
+                      budgetId={budgetId}
+                      editHref={periodHref(basePath, selection.year, selection.month, { editPayment: payment.id })}
+                      entity="expensePayment"
+                      recordId={payment.id}
                     />
                   ) : null}
                 </TableCell>

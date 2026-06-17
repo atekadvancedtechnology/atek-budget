@@ -9,6 +9,7 @@ import {
   createBudgetSchema,
   debtSchema,
   expenseCategorySchema,
+  expensePaymentSchema,
   expenseSchema,
   incomeReceiptSchema,
   incomeSchema,
@@ -647,6 +648,49 @@ function revalidateBudgetCategoryPaths(budgetId: string) {
   revalidatePath(`/app/budgets/${budgetId}/dashboard`);
 }
 
+function revalidateBudgetExpensePaths(budgetId: string) {
+  revalidatePath(`/app/budgets/${budgetId}`);
+  revalidatePath(`/app/budgets/${budgetId}/expenses`);
+  revalidatePath(`/app/budgets/${budgetId}/dashboard`);
+  revalidatePath(`/app/budgets/${budgetId}/cashflow`);
+  revalidatePath(`/app/budgets/${budgetId}/history`);
+}
+
+async function updateExpenseActualFromPayments(tx: Tx, expenseId: string) {
+  const expense = await tx.expense.findUnique({
+    where: {
+      id: expenseId
+    },
+    select: {
+      id: true,
+      amountBudgetedMonthly: true
+    }
+  });
+
+  if (!expense) return;
+
+  const paymentTotal = await tx.expensePayment.aggregate({
+    where: {
+      expenseId
+    },
+    _sum: {
+      amount: true
+    }
+  });
+  const actualAmount = Number(paymentTotal._sum.amount ?? 0);
+
+  await tx.expense.update({
+    where: {
+      id: expense.id
+    },
+    data: {
+      actualAmount,
+      difference: calculateExpenseDifference(actualAmount, expense.amountBudgetedMonthly),
+      status: calculateExpenseStatus(actualAmount, expense.amountBudgetedMonthly)
+    }
+  });
+}
+
 export async function createExpenseCategoryAction(budgetId: string, raw: unknown) {
   const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER, WorkspaceRole.EDITOR]);
   const data = expenseCategorySchema.parse(raw);
@@ -765,7 +809,8 @@ export async function deleteExpenseCategoryAction(budgetId: string, categoryId: 
       include: {
         _count: {
           select: {
-            expenses: true
+            expenses: true,
+            expensePayments: true
           }
         }
       }
@@ -775,7 +820,7 @@ export async function deleteExpenseCategoryAction(budgetId: string, categoryId: 
       throw new Error("No se encontró la categoría en este presupuesto.");
     }
 
-    if (existing._count.expenses > 0) {
+    if (existing._count.expenses > 0 || existing._count.expensePayments > 0) {
       throw new Error("No puedes eliminar una categoría que ya tiene gastos registrados. Puedes editar su nombre para reutilizarla.");
     }
 
@@ -854,9 +899,6 @@ export async function createExpenseAction(budgetId: string, periodTarget: Period
 export async function updateExpenseAction(budgetId: string, expenseId: string, raw: unknown) {
   const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER, WorkspaceRole.EDITOR]);
   const data = expenseSchema.parse(raw);
-  const actualAmount = data.actualAmount ?? 0;
-  const status = calculateExpenseStatus(actualAmount, data.amountBudgetedMonthly);
-  const difference = calculateExpenseDifference(actualAmount, data.amountBudgetedMonthly);
 
   await prisma.$transaction(async (tx) => {
     const existing = await tx.expense.findFirst({
@@ -871,6 +913,21 @@ export async function updateExpenseAction(budgetId: string, expenseId: string, r
     if (!existing) {
       throw new Error("No se encontró el gasto en este presupuesto.");
     }
+
+    const paymentTotal = await tx.expensePayment.aggregate({
+      where: {
+        expenseId: existing.id
+      },
+      _sum: {
+        amount: true
+      },
+      _count: true
+    });
+    const actualAmount = paymentTotal._count > 0
+      ? Number(paymentTotal._sum.amount ?? 0)
+      : data.actualAmount ?? Number(existing.actualAmount ?? 0);
+    const status = calculateExpenseStatus(actualAmount, data.amountBudgetedMonthly);
+    const difference = calculateExpenseDifference(actualAmount, data.amountBudgetedMonthly);
 
     const expense = await tx.expense.update({
       where: {
@@ -893,6 +950,25 @@ export async function updateExpenseAction(budgetId: string, expenseId: string, r
         updatedById: access.user.id
       }
     });
+
+    if (
+      existing.name !== expense.name ||
+      existing.responsibleName !== expense.responsibleName ||
+      existing.categoryId !== expense.categoryId ||
+      existing.bankAccountId !== expense.bankAccountId
+    ) {
+      await tx.expensePayment.updateMany({
+        where: {
+          expenseId: expense.id
+        },
+        data: {
+          name: expense.name,
+          responsibleName: expense.responsibleName,
+          categoryId: expense.categoryId,
+          bankAccountId: expense.bankAccountId
+        }
+      });
+    }
 
     await audit(tx, {
       workspaceId: access.budget.workspaceId,
@@ -958,6 +1034,276 @@ export async function deleteExpenseAction(budgetId: string, expenseId: string) {
 
   revalidatePath(`/app/budgets/${budgetId}`);
   revalidatePath(`/app/budgets/${budgetId}/expenses`);
+}
+
+function assertDateInPeriod(date: Date, period: { year: number; month: number }) {
+  if (date.getUTCFullYear() !== period.year || date.getUTCMonth() + 1 !== period.month) {
+    throw new Error("La fecha del pago debe pertenecer al periodo seleccionado.");
+  }
+}
+
+export async function createExpensePaymentAction(budgetId: string, periodTarget: PeriodTarget, raw: unknown) {
+  const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER, WorkspaceRole.EDITOR]);
+  const data = expensePaymentSchema.parse(raw);
+
+  await prisma.$transaction(async (tx) => {
+    const period = await getOrCreateBudgetPeriodWithInheritance(tx, budgetId, periodTarget, access.user.id);
+    const paidDate = new Date(data.paidDate);
+    assertDateInPeriod(paidDate, period);
+    let linkedExpense: {
+      id: string;
+      name: string;
+      responsibleName: string;
+      categoryId: string;
+      bankAccountId: string | null;
+    } | null = null;
+
+    if (data.expenseId) {
+      linkedExpense = await tx.expense.findFirst({
+        where: {
+          id: data.expenseId,
+          budgetPeriodId: period.id
+        },
+        select: {
+          id: true,
+          name: true,
+          responsibleName: true,
+          categoryId: true,
+          bankAccountId: true
+        }
+      });
+
+      if (!linkedExpense) {
+        throw new Error("El gasto planificado seleccionado no pertenece al periodo seleccionado.");
+      }
+    } else {
+      const category = await tx.expenseCategory.findFirst({
+        where: {
+          id: data.categoryId,
+          budgetId
+        }
+      });
+
+      if (!category) {
+        throw new Error("La categoría seleccionada no pertenece a este presupuesto.");
+      }
+
+      if (data.bankAccountId) {
+        const account = await tx.bankAccount.findFirst({
+          where: {
+            id: data.bankAccountId,
+            budgetId
+          }
+        });
+
+        if (!account) {
+          throw new Error("La cuenta seleccionada no pertenece a este presupuesto.");
+        }
+      }
+    }
+
+    const payment = await tx.expensePayment.create({
+      data: {
+        budgetPeriodId: period.id,
+        expenseId: linkedExpense?.id ?? null,
+        name: linkedExpense?.name ?? data.name,
+        responsibleName: linkedExpense?.responsibleName ?? data.responsibleName,
+        categoryId: linkedExpense?.categoryId ?? data.categoryId,
+        bankAccountId: (linkedExpense?.bankAccountId ?? data.bankAccountId) || null,
+        amount: data.amount,
+        paidDate,
+        notes: data.notes,
+        createdById: access.user.id
+      }
+    });
+
+    if (linkedExpense) {
+      await updateExpenseActualFromPayments(tx, linkedExpense.id);
+    }
+
+    await audit(tx, {
+      workspaceId: access.budget.workspaceId,
+      userId: access.user.id,
+      entityType: "ExpensePayment",
+      entityId: payment.id,
+      action: "CREATE_EXPENSE_PAYMENT",
+      newValue: {
+        expenseId: payment.expenseId,
+        name: payment.name,
+        amount: Number(payment.amount),
+        paidDate: payment.paidDate.toISOString()
+      }
+    });
+  });
+
+  revalidateBudgetExpensePaths(budgetId);
+}
+
+export async function updateExpensePaymentAction(budgetId: string, paymentId: string, raw: unknown) {
+  const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER, WorkspaceRole.EDITOR]);
+  const data = expensePaymentSchema.parse(raw);
+
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.expensePayment.findFirst({
+      where: {
+        id: paymentId,
+        budgetPeriod: {
+          budgetId
+        }
+      },
+      include: {
+        budgetPeriod: true
+      }
+    });
+
+    if (!existing) {
+      throw new Error("No se encontró el pago de gasto en este presupuesto.");
+    }
+
+    const paidDate = new Date(data.paidDate);
+    assertDateInPeriod(paidDate, existing.budgetPeriod);
+    let linkedExpense: {
+      id: string;
+      name: string;
+      responsibleName: string;
+      categoryId: string;
+      bankAccountId: string | null;
+    } | null = null;
+
+    if (data.expenseId) {
+      linkedExpense = await tx.expense.findFirst({
+        where: {
+          id: data.expenseId,
+          budgetPeriodId: existing.budgetPeriodId
+        },
+        select: {
+          id: true,
+          name: true,
+          responsibleName: true,
+          categoryId: true,
+          bankAccountId: true
+        }
+      });
+
+      if (!linkedExpense) {
+        throw new Error("El gasto planificado seleccionado no pertenece al periodo del pago.");
+      }
+    } else {
+      const category = await tx.expenseCategory.findFirst({
+        where: {
+          id: data.categoryId,
+          budgetId
+        }
+      });
+
+      if (!category) {
+        throw new Error("La categoría seleccionada no pertenece a este presupuesto.");
+      }
+
+      if (data.bankAccountId) {
+        const account = await tx.bankAccount.findFirst({
+          where: {
+            id: data.bankAccountId,
+            budgetId
+          }
+        });
+
+        if (!account) {
+          throw new Error("La cuenta seleccionada no pertenece a este presupuesto.");
+        }
+      }
+    }
+
+    const payment = await tx.expensePayment.update({
+      where: {
+        id: existing.id
+      },
+      data: {
+        expenseId: linkedExpense?.id ?? null,
+        name: linkedExpense?.name ?? data.name,
+        responsibleName: linkedExpense?.responsibleName ?? data.responsibleName,
+        categoryId: linkedExpense?.categoryId ?? data.categoryId,
+        bankAccountId: (linkedExpense?.bankAccountId ?? data.bankAccountId) || null,
+        amount: data.amount,
+        paidDate,
+        notes: data.notes
+      }
+    });
+
+    const expenseIdsToRefresh = new Set(
+      [existing.expenseId, payment.expenseId].filter((expenseId): expenseId is string => Boolean(expenseId))
+    );
+    for (const expenseIdToRefresh of expenseIdsToRefresh) {
+      await updateExpenseActualFromPayments(tx, expenseIdToRefresh);
+    }
+
+    await audit(tx, {
+      workspaceId: access.budget.workspaceId,
+      userId: access.user.id,
+      entityType: "ExpensePayment",
+      entityId: payment.id,
+      action: "UPDATE_EXPENSE_PAYMENT",
+      oldValue: {
+        expenseId: existing.expenseId,
+        name: existing.name,
+        amount: Number(existing.amount),
+        paidDate: existing.paidDate.toISOString()
+      },
+      newValue: {
+        expenseId: payment.expenseId,
+        name: payment.name,
+        amount: Number(payment.amount),
+        paidDate: payment.paidDate.toISOString()
+      }
+    });
+  });
+
+  revalidateBudgetExpensePaths(budgetId);
+}
+
+export async function deleteExpensePaymentAction(budgetId: string, paymentId: string) {
+  const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER, WorkspaceRole.EDITOR]);
+
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.expensePayment.findFirst({
+      where: {
+        id: paymentId,
+        budgetPeriod: {
+          budgetId
+        }
+      }
+    });
+
+    if (!existing) {
+      throw new Error("No se encontró el pago de gasto en este presupuesto.");
+    }
+
+    await tx.expensePayment.delete({
+      where: {
+        id: existing.id
+      }
+    });
+
+    if (existing.expenseId) {
+      await updateExpenseActualFromPayments(tx, existing.expenseId);
+    }
+
+    await audit(tx, {
+      workspaceId: access.budget.workspaceId,
+      userId: access.user.id,
+      entityType: "ExpensePayment",
+      entityId: existing.id,
+      action: "DELETE_EXPENSE_PAYMENT",
+      oldValue: {
+        expenseId: existing.expenseId,
+        name: existing.name,
+        amount: Number(existing.amount),
+        paidDate: existing.paidDate.toISOString()
+      }
+    });
+  });
+
+  revalidateBudgetExpensePaths(budgetId);
 }
 
 export async function createDebtAction(budgetId: string, periodTarget: PeriodTarget, raw: unknown) {

@@ -8,6 +8,7 @@ import { useTransition } from "react";
 import {
   deleteDebtAction,
   deleteExpenseAction,
+  deleteExpensePaymentAction,
   deleteIncomeAction,
   deleteIncomeReceiptAction,
   deleteSavingGoalAction,
@@ -15,12 +16,13 @@ import {
 } from "@/lib/actions";
 import { Button } from "@/components/ui/button";
 
-type RecordEntity = "income" | "incomeReceipt" | "expense" | "debt" | "savingGoal";
+type RecordEntity = "income" | "incomeReceipt" | "expense" | "expensePayment" | "debt" | "savingGoal";
 
 const deleteActions = {
   income: deleteIncomeAction,
   incomeReceipt: deleteIncomeReceiptAction,
   expense: deleteExpenseAction,
+  expensePayment: deleteExpensePaymentAction,
   debt: deleteDebtAction,
   savingGoal: deleteSavingGoalAction
 };
@@ -29,6 +31,7 @@ const entityLabels: Record<RecordEntity, string> = {
   income: "ingreso esperado",
   incomeReceipt: "ingreso recibido",
   expense: "gasto",
+  expensePayment: "pago de gasto",
   debt: "deuda",
   savingGoal: "meta de ahorro"
 };

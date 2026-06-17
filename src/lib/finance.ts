@@ -40,12 +40,20 @@ type IncomeReceiptLike = {
 };
 
 type ExpenseLike = {
+  id?: string;
   amountBudgetedMonthly: DecimalLike;
   amountQ1: DecimalLike;
   amountQ2: DecimalLike;
   actualAmount?: DecimalLike;
   status?: ExpenseStatusValue;
   isActive?: boolean;
+  categoryId?: string;
+  payments?: ExpensePaymentLike[];
+};
+
+type ExpensePaymentLike = {
+  amount: DecimalLike;
+  expenseId?: string | null;
   categoryId?: string;
 };
 
@@ -297,12 +305,43 @@ export function receivedIncomeForIncome(income: IncomeLike) {
   return sum((income.receipts ?? []).map((receipt) => receipt.amount));
 }
 
+export function actualExpenseAmount(expense: ExpenseLike) {
+  const payments = expense.payments ?? [];
+  if (payments.length > 0) {
+    return sum(payments.map((payment) => payment.amount));
+  }
+
+  return toNumber(expense.actualAmount);
+}
+
+function actualExpensesForPeriod(input: { expenses: ExpenseLike[]; expensePayments?: ExpensePaymentLike[] }) {
+  if (!input.expensePayments) {
+    return sum(input.expenses.filter((expense) => expense.isActive !== false).map(actualExpenseAmount));
+  }
+
+  const linkedExpenseIds = new Set(
+    input.expensePayments
+      .map((payment) => payment.expenseId)
+      .filter((expenseId): expenseId is string => Boolean(expenseId))
+  );
+  const paymentTotal = sum(input.expensePayments.map((payment) => payment.amount));
+  const fallbackActual = sum(
+    input.expenses
+      .filter((expense) => expense.isActive !== false)
+      .filter((expense) => !expense.id || !linkedExpenseIds.has(expense.id))
+      .map((expense) => expense.actualAmount)
+  );
+
+  return paymentTotal + fallbackActual;
+}
+
 export function buildBudgetSummary(input: {
   year: number;
   month: number;
   incomes: IncomeLike[];
   incomeReceipts?: IncomeReceiptLike[];
   expenses: ExpenseLike[];
+  expensePayments?: ExpensePaymentLike[];
   debts: DebtLike[];
   savingGoals: SavingGoalLike[];
 }) {
@@ -317,7 +356,7 @@ export function buildBudgetSummary(input: {
   const totalIncomeAnnualEstimated = sum(activeIncomes.map((income) => estimateAnnualIncome(income)));
   const totalIncomeReceived = receivedIncomeForPeriod(input);
   const totalBudgetedExpenses = sum(activeExpenses.map((expense) => expense.amountBudgetedMonthly));
-  const totalActualExpenses = sum(activeExpenses.map((expense) => expense.actualAmount));
+  const totalActualExpenses = actualExpensesForPeriod(input);
   const totalExpensesQ1 = sum(activeExpenses.map((expense) => expense.amountQ1));
   const totalExpensesQ2 = sum(activeExpenses.map((expense) => expense.amountQ2));
   const totalSavingPlanned = sum(input.savingGoals.map((goal) => goal.monthlyTarget));
@@ -362,14 +401,22 @@ export function buildBudgetSummary(input: {
 export function buildCategoryBreakdown(
   expenses: ExpenseLike[],
   categories: CategoryLike[],
-  totalIncome: DecimalLike
+  totalIncome: DecimalLike,
+  expensePayments?: ExpensePaymentLike[]
 ) {
   return categories.map((category) => {
     const categoryExpenses = expenses.filter(
       (expense) => expense.isActive !== false && expense.categoryId === category.id
     );
     const budgeted = sum(categoryExpenses.map((expense) => expense.amountBudgetedMonthly));
-    const actual = sum(categoryExpenses.map((expense) => expense.actualAmount));
+    const actual = expensePayments
+      ? sum(expensePayments.filter((payment) => payment.categoryId === category.id).map((payment) => payment.amount)) +
+        sum(
+          categoryExpenses
+            .filter((expense) => !expense.id || !expensePayments.some((payment) => payment.expenseId === expense.id))
+            .map((expense) => expense.actualAmount)
+        )
+      : sum(categoryExpenses.map(actualExpenseAmount));
     const percentOfIncome = safePercent(actual || budgeted, totalIncome);
     const recommendedMaxPercent = toNumber(category.recommendedMaxPercent);
 
