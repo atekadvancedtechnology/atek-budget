@@ -731,7 +731,7 @@ export function ExpensePaymentForm({
           <FieldError message={form.formState.errors.expenseId?.message?.toString()} />
         </div>
         <TextInput label="Gasto" name="name" form={form} disabled={disabled} />
-        <MemberField form={form} members={members} disabled={disabled || Boolean(selectedExpenseId)} />
+        <MemberField form={form} members={members} disabled={disabled} />
         <SelectField label="Categoría" name="categoryId" form={form} disabled={disabled} options={categories} />
         <SelectField label="Cuenta" name="bankAccountId" form={form} disabled={disabled} options={accountOptions} />
         <MoneyInput label="Monto pagado" name="amount" form={form} disabled={disabled} />

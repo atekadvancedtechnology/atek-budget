@@ -1789,6 +1789,39 @@ function assertDateInPeriod(date: Date, period: { year: number; month: number })
   }
 }
 
+async function validateExpensePaymentReferences(
+  tx: Tx,
+  budgetId: string,
+  data: {
+    categoryId: string;
+    bankAccountId?: string;
+  }
+) {
+  const category = await tx.expenseCategory.findFirst({
+    where: {
+      id: data.categoryId,
+      budgetId
+    }
+  });
+
+  if (!category) {
+    throw new Error("La categoría seleccionada no pertenece a este presupuesto.");
+  }
+
+  if (data.bankAccountId) {
+    const account = await tx.bankAccount.findFirst({
+      where: {
+        id: data.bankAccountId,
+        budgetId
+      }
+    });
+
+    if (!account) {
+      throw new Error("La cuenta seleccionada no pertenece a este presupuesto.");
+    }
+  }
+}
+
 export async function createExpensePaymentAction(budgetId: string, periodTarget: PeriodTarget, raw: unknown) {
   const access = await requireBudgetRole(budgetId, [WorkspaceRole.OWNER, WorkspaceRole.EDITOR]);
   const data = expensePaymentSchema.parse(raw);
@@ -1855,12 +1888,9 @@ export async function createExpensePaymentAction(budgetId: string, periodTarget:
       }
     }
 
-    const responsible = linkedExpense
-      ? {
-          responsibleMemberId: linkedExpense.responsibleMemberId,
-          responsibleName: linkedExpense.responsibleName
-        }
-      : await resolveResponsibleMember(tx, budgetId, data);
+    await validateExpensePaymentReferences(tx, budgetId, data);
+
+    const responsible = await resolveResponsibleMember(tx, budgetId, data);
     const currency = await resolveCurrency(tx, budgetId, {
       currencyId: data.currencyId || linkedExpense?.currencyId || undefined,
       exchangeRateToDop: data.exchangeRateToDop || Number(linkedExpense?.exchangeRateToDop ?? 1)
@@ -1874,8 +1904,8 @@ export async function createExpensePaymentAction(budgetId: string, periodTarget:
         name: linkedExpense?.name ?? data.name,
         responsibleName: responsible.responsibleName,
         responsibleMemberId: responsible.responsibleMemberId,
-        categoryId: linkedExpense?.categoryId ?? data.categoryId,
-        bankAccountId: (linkedExpense?.bankAccountId ?? data.bankAccountId) || null,
+        categoryId: data.categoryId,
+        bankAccountId: data.bankAccountId || null,
         currencyId: currency.currencyId,
         currencyCode: currency.currencyCode,
         currencySymbol: currency.currencySymbol,
@@ -1994,12 +2024,9 @@ export async function updateExpensePaymentAction(budgetId: string, paymentId: st
       }
     }
 
-    const responsible = linkedExpense
-      ? {
-          responsibleMemberId: linkedExpense.responsibleMemberId,
-          responsibleName: linkedExpense.responsibleName
-        }
-      : await resolveResponsibleMember(tx, budgetId, data);
+    await validateExpensePaymentReferences(tx, budgetId, data);
+
+    const responsible = await resolveResponsibleMember(tx, budgetId, data);
     const currency = await resolveCurrency(tx, budgetId, {
       currencyId: data.currencyId || linkedExpense?.currencyId || undefined,
       exchangeRateToDop: data.exchangeRateToDop || Number(linkedExpense?.exchangeRateToDop ?? 1)
@@ -2015,8 +2042,8 @@ export async function updateExpensePaymentAction(budgetId: string, paymentId: st
         name: linkedExpense?.name ?? data.name,
         responsibleName: responsible.responsibleName,
         responsibleMemberId: responsible.responsibleMemberId,
-        categoryId: linkedExpense?.categoryId ?? data.categoryId,
-        bankAccountId: (linkedExpense?.bankAccountId ?? data.bankAccountId) || null,
+        categoryId: data.categoryId,
+        bankAccountId: data.bankAccountId || null,
         currencyId: currency.currencyId,
         currencyCode: currency.currencyCode,
         currencySymbol: currency.currencySymbol,
