@@ -57,9 +57,56 @@ type ExpensePaymentLike = {
 };
 
 type DebtLike = {
+  id?: string;
+  name?: string;
+  entity?: string;
   pendingBalance: DecimalLike;
   monthlyPayment: DecimalLike;
+  annualInterestRate?: DecimalLike;
+  remainingMonths?: number;
   status?: string;
+};
+
+export type DebtHealthStatus = "healthy" | "watch" | "high" | "veryHigh" | "critical";
+
+export type DebtHealthDebt = DebtLike & {
+  id: string;
+  name: string;
+  entity: string;
+  annualInterestRate: DecimalLike;
+  remainingMonths: number;
+};
+
+export type DebtHealthPhaseTarget = {
+  targetPercent: number;
+  maxDebtPayment: number;
+  monthlyPaymentToFree: number;
+};
+
+export type DebtHealthDebtImpact = {
+  debtId: string;
+  name: string;
+  entity: string;
+  pendingBalance: number;
+  monthlyPayment: number;
+  annualInterestRate: number;
+  remainingMonths: number;
+  payoffMonthLabel: string;
+  newMonthlyCommitted: number;
+  newDebtBurdenPercent: number;
+  percentReduction: number;
+};
+
+export type DebtHealthSummary = {
+  totalIncome: number;
+  totalDebtPayments: number;
+  debtBurdenPercent: number;
+  status: DebtHealthStatus;
+  statusLabel: string;
+  isCritical: boolean;
+  recommendedDebt?: DebtHealthDebtImpact;
+  impacts: DebtHealthDebtImpact[];
+  phases: DebtHealthPhaseTarget[];
 };
 
 type SavingGoalLike = {
@@ -110,6 +157,135 @@ export function calculateDebtInterest(
   remainingMonths: number
 ): number {
   return toNumber(pendingBalance) * (toNumber(annualInterestRate) / 100 / 12) * remainingMonths;
+}
+
+export function classifyDebtBurden(percent: number): DebtHealthStatus {
+  if (percent <= 30) return "healthy";
+  if (percent <= 40) return "watch";
+  if (percent <= 60) return "high";
+  if (percent <= 75) return "veryHigh";
+  return "critical";
+}
+
+export function debtHealthStatusLabel(status: DebtHealthStatus) {
+  const labels: Record<DebtHealthStatus, string> = {
+    healthy: "Saludable",
+    watch: "Controlado, pero vigilar",
+    high: "Alto",
+    veryHigh: "Muy alto",
+    critical: "Critico"
+  };
+
+  return labels[status];
+}
+
+function calculateDebtBurdenPercent(totalDebtPayments: DecimalLike, totalIncome: DecimalLike) {
+  const payments = toNumber(totalDebtPayments);
+  const income = toNumber(totalIncome);
+  if (income <= 0 && payments > 0) return 100;
+  return safePercent(payments, income);
+}
+
+function addMonthsLabel(year: number, month: number, monthsToAdd: number) {
+  const date = new Date(Date.UTC(year, month - 1 + Math.max(monthsToAdd, 0), 1));
+  return new Intl.DateTimeFormat("es-DO", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC"
+  }).format(date);
+}
+
+function activeDebtHealthDebts(debts: DebtHealthDebt[]) {
+  return debts.filter((debt) => debt.status !== "PAID" && debt.status !== "CANCELLED");
+}
+
+export function calculateDebtHealth(input: {
+  debts: DebtHealthDebt[];
+  totalIncome: DecimalLike;
+  totalDebtPayments?: DecimalLike;
+  periodYear: number;
+  periodMonth: number;
+}): DebtHealthSummary {
+  const activeDebts = activeDebtHealthDebts(input.debts);
+  const totalIncome = toNumber(input.totalIncome);
+  const totalDebtPayments = input.totalDebtPayments == null
+    ? sum(activeDebts.map((debt) => debt.monthlyPayment))
+    : toNumber(input.totalDebtPayments);
+  const debtBurdenPercent = calculateDebtBurdenPercent(totalDebtPayments, totalIncome);
+  const status = classifyDebtBurden(debtBurdenPercent);
+
+  const impacts = activeDebts
+    .map<DebtHealthDebtImpact>((debt) => {
+      const monthlyPayment = toNumber(debt.monthlyPayment);
+      const pendingBalance = toNumber(debt.pendingBalance);
+      const newMonthlyCommitted = Math.max(totalDebtPayments - monthlyPayment, 0);
+      const newDebtBurdenPercent = calculateDebtBurdenPercent(newMonthlyCommitted, totalIncome);
+
+      return {
+        debtId: debt.id,
+        name: debt.name,
+        entity: debt.entity,
+        pendingBalance,
+        monthlyPayment,
+        annualInterestRate: toNumber(debt.annualInterestRate),
+        remainingMonths: debt.remainingMonths,
+        payoffMonthLabel: addMonthsLabel(input.periodYear, input.periodMonth, debt.remainingMonths),
+        newMonthlyCommitted,
+        newDebtBurdenPercent,
+        percentReduction: Math.max(debtBurdenPercent - newDebtBurdenPercent, 0)
+      };
+    })
+    .sort((a, b) => {
+      if (a.pendingBalance !== b.pendingBalance) return a.pendingBalance - b.pendingBalance;
+      return b.annualInterestRate - a.annualInterestRate;
+    });
+
+  return {
+    totalIncome,
+    totalDebtPayments,
+    debtBurdenPercent,
+    status,
+    statusLabel: debtHealthStatusLabel(status),
+    isCritical: status === "critical",
+    recommendedDebt: impacts[0],
+    impacts,
+    phases: [65, 50, 35].map((targetPercent) => {
+      const maxDebtPayment = totalIncome * targetPercent / 100;
+
+      return {
+        targetPercent,
+        maxDebtPayment,
+        monthlyPaymentToFree: Math.max(totalDebtPayments - maxDebtPayment, 0)
+      };
+    })
+  };
+}
+
+export function simulateDebtExtraPayment(input: {
+  debt: DebtHealthDebt;
+  extraPayment: DecimalLike;
+  totalIncome: DecimalLike;
+  totalDebtPayments: DecimalLike;
+  periodYear: number;
+  periodMonth: number;
+}) {
+  const extraPayment = Math.max(toNumber(input.extraPayment), 0);
+  const pendingBalance = toNumber(input.debt.pendingBalance);
+  const monthlyPayment = toNumber(input.debt.monthlyPayment);
+  const newBalance = Math.max(pendingBalance - extraPayment, 0);
+  const isPaidOff = pendingBalance > 0 && newBalance === 0;
+  const newMonthlyCommitted = Math.max(toNumber(input.totalDebtPayments) - (isPaidOff ? monthlyPayment : 0), 0);
+  const estimatedRemainingMonths = newBalance <= 0 || monthlyPayment <= 0
+    ? 0
+    : Math.ceil(newBalance / monthlyPayment);
+
+  return {
+    newBalance,
+    newMonthlyCommitted,
+    newDebtBurdenPercent: calculateDebtBurdenPercent(newMonthlyCommitted, input.totalIncome),
+    estimatedRemainingMonths,
+    estimatedPayoffMonthLabel: addMonthsLabel(input.periodYear, input.periodMonth, estimatedRemainingMonths)
+  };
 }
 
 export function savingGoalProgress(contributed: DecimalLike, target: DecimalLike): number {

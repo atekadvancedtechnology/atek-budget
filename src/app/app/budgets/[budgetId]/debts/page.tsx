@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 
+import { DebtHealthPanel } from "@/components/debt-health-panel";
 import { DebtForm } from "@/components/forms";
 import { MetricCard } from "@/components/metric-card";
 import { PeriodSelector } from "@/components/period-selector";
@@ -61,6 +62,16 @@ export default async function DebtsPage({ params, searchParams }: PageProps) {
     defaultRateToDop: Number(currency.defaultRateToDop),
     isBase: currency.isBase
   }));
+  const debtHealthDebts = selectedPeriod?.debts.map((debt) => ({
+    id: debt.id,
+    name: debt.name,
+    entity: debt.entity,
+    pendingBalance: Number(debt.pendingBalance),
+    monthlyPayment: Number(debt.monthlyPayment),
+    annualInterestRate: Number(debt.annualInterestRate),
+    remainingMonths: debt.remainingMonths,
+    status: debt.status
+  })) ?? [];
 
   return (
     <div className="space-y-6">
@@ -89,6 +100,14 @@ export default async function DebtsPage({ params, searchParams }: PageProps) {
           value={formatPercent(summary.debtPaymentPercentOfIncome)}
         />
       </div>
+
+      <DebtHealthPanel
+        debts={debtHealthDebts}
+        periodMonth={selection.month}
+        periodYear={selection.year}
+        totalDebtPayments={summary.totalDebtMonthlyPayments}
+        totalIncome={summary.totalIncomeExpected}
+      />
 
       <DebtForm
         key={`${editDebt?.id ?? "new-debt"}-${selection.year}-${selection.month}`}
